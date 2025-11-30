@@ -1,0 +1,8 @@
+/* src/index.css */
+@import "tailwindcss";
+
+/* If you need additional CSS layers, you might still use:
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+But typically, the @import handles the core functionality in v4. */
