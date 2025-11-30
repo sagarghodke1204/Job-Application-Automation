@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 
 // --- Configuration and Initialization ---
-const BACKEND_URL = "http://127.0.0.1:8000";
+const BACKEND_URL = import.meta.env.VITE_API_URL;
 
 const initialFormData = {
     // Section 0: Credentials
@@ -220,376 +220,306 @@ const NaukriScraperPage = () => {
     };
 
     // Fetch stats and check status on load and when username changes
-    useEffect(() => {
-        fetchStats();
-        checkTaskStatus();
-    }, [formData.username]);
+    // Local logs are also added, but redundant if backend sends everything. 
+    // We keep this for immediate UI feedback on button clicks.
+    setLog(prev => [`[${timestamp}] ${entry}`, ...prev].slice(0, 100));
+};
 
-    // WebSocket Connection
-    useEffect(() => {
-        // Only connect if username is available
-        if (!formData.username) return;
+const handleChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setFormData(prev => ({
+        ...prev,
+        [name]: type === 'checkbox' ? checked :
+            (name === 'currentCtc' || name === 'expectedCtc' || name === 'experience' || name === 'minScore')
+                ? (value === '' ? '' : parseFloat(value))
+                : value,
+    }));
+};
 
-        // Use encodeURIComponent to handle special characters in email/username
-        const wsUrl = `ws://127.0.0.1:8000/ws/logs/${encodeURIComponent(formData.username)}`;
-        const ws = new WebSocket(wsUrl);
+const buildPayload = () => ({
+    username: formData.username,
+    password: formData.password,
+    continue_session: formData.continueSession,
 
-        ws.onopen = () => {
-            console.log("Connected to WebSocket");
-            // We don't spam "Connected" anymore. 
-            // If a task is running, checkTaskStatus will handle the "Resuming" message.
-        };
+    location: formData.location,
+    experience: parseInt(formData.experience) || 0,
+    roles: formData.roles.split(/,|\n/).map(r => r.trim()).filter(r => r.length > 0),
+    postal_code: formData.postalCode || initialFormData.postalCode,
+    total_exp_years: formData.totalExpYears || initialFormData.totalExpYears.toString(),
+    tech_keywords: formData.techKeywords.split(',').map(t => t.trim()).filter(t => t.length > 0),
 
-        ws.onmessage = (event) => {
-            try {
-                const msg = JSON.parse(event.data);
+    apply_tech_filter: formData.applyTechFilter,
+    apply_min_score: formData.applyMinScore,
+    min_score: parseFloat(formData.minScore) || 0,
 
-                // Handle completion events explicitly
-                if (msg.action === 'scrape_complete' || msg.action === 'apply_complete') {
-                    setLoading(false);
-                    fetchStats();
-                    setLog(prev => [msg, ...prev].slice(0, 100));
-                    setApiMessage({ type: 'success', text: msg.message || 'Task Completed Successfully' });
-                } else {
-                    setLog(prev => [msg, ...prev].slice(0, 100));
-                }
+    user_exp_raw: formData.userExperience,
+    include_user_experience: formData.includeUserExperience,
+    include_common_answers: formData.includeCommonAnswers,
+    common_answers: {
+        notice_period: formData.noticePeriod,
+        current_ctc: (formData.currentCtc * 100000).toString(),
+        expected_ctc: (formData.expectedCtc * 100000).toString(),
+        linkedin: formData.linkedinUrl,
+        face_to_face: formData.faceToFace
+    },
+});
 
-                if (msg.action === 'apply') {
-                    fetchStats();
-                }
-            } catch (e) {
-                // Handle legacy string messages
-                const textMsg = event.data;
-                setLog(prev => [textMsg, ...prev].slice(0, 100));
+const handleJobTrigger = async (endpoint, buttonLabel) => {
+    if (!formData.username || !formData.password) {
+        setApiMessage({ type: 'error', text: "Naukri credentials are required." });
+        return;
+    }
 
-                // Fallback: Check for "SLOT RELEASED" string if JSON action fails
-                if (typeof textMsg === 'string' && textMsg.includes("SLOT RELEASED")) {
-                    setLoading(false);
-                    fetchStats();
-                }
-            }
-        };
+    setLoading(buttonLabel);
+    setApiMessage({ type: '', text: '' });
+    logMessage(`Initiating: ${buttonLabel}...`);
 
-        ws.onclose = () => {
-            console.log("Disconnected from WebSocket");
-            // Optional: Only log disconnection if we were actually running something
-            if (loading) {
-                setLog(prev => [`[System] Connection lost. Reconnecting...`, ...prev].slice(0, 100));
-            }
-        };
+    const payload = buildPayload();
 
-        ws.onerror = (error) => {
-            console.error("WebSocket Error:", error);
-        };
-
-        return () => {
-            ws.close();
-        };
-    }, [formData.username, loading]);
-
-    const logMessage = (msg, isError = false) => {
-        const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
-        const entry = isError ? `[ERROR] ${msg}` : msg;
-        // Local logs are also added, but redundant if backend sends everything. 
-        // We keep this for immediate UI feedback on button clicks.
-        setLog(prev => [`[${timestamp}] ${entry}`, ...prev].slice(0, 100));
-    };
-
-    const handleChange = (e) => {
-        const { name, value, type, checked } = e.target;
-        setFormData(prev => ({
-            ...prev,
-            [name]: type === 'checkbox' ? checked :
-                (name === 'currentCtc' || name === 'expectedCtc' || name === 'experience' || name === 'minScore')
-                    ? (value === '' ? '' : parseFloat(value))
-                    : value,
-        }));
-    };
-
-    const buildPayload = () => ({
-        username: formData.username,
-        password: formData.password,
-        continue_session: formData.continueSession,
-
-        location: formData.location,
-        experience: parseInt(formData.experience) || 0,
-        roles: formData.roles.split(/,|\n/).map(r => r.trim()).filter(r => r.length > 0),
-        postal_code: formData.postalCode || initialFormData.postalCode,
-        total_exp_years: formData.totalExpYears || initialFormData.totalExpYears.toString(),
-        tech_keywords: formData.techKeywords.split(',').map(t => t.trim()).filter(t => t.length > 0),
-
-        apply_tech_filter: formData.applyTechFilter,
-        apply_min_score: formData.applyMinScore,
-        min_score: parseFloat(formData.minScore) || 0,
-
-        user_exp_raw: formData.userExperience,
-        include_user_experience: formData.includeUserExperience,
-        include_common_answers: formData.includeCommonAnswers,
-        common_answers: {
-            notice_period: formData.noticePeriod,
-            current_ctc: (formData.currentCtc * 100000).toString(),
-            expected_ctc: (formData.expectedCtc * 100000).toString(),
-            linkedin: formData.linkedinUrl,
-            face_to_face: formData.faceToFace
-        },
-    });
-
-    const handleJobTrigger = async (endpoint, buttonLabel) => {
-        if (!formData.username || !formData.password) {
-            setApiMessage({ type: 'error', text: "Naukri credentials are required." });
-            return;
+    try {
+        const response = await axios.post(BACKEND_URL + endpoint, payload);
+        if (response.status === 200) {
+            const result = response.data;
+            setApiMessage({ type: 'success', text: result.status || `${buttonLabel} initiated successfully!` });
+            logMessage(`Success! Job Status: ${result.status}`);
+            fetchStats(); // Refresh stats after triggering
         }
-
-        setLoading(buttonLabel);
-        setApiMessage({ type: '', text: '' });
-        logMessage(`Initiating: ${buttonLabel}...`);
-
-        const payload = buildPayload();
-
-        try {
-            const response = await axios.post(BACKEND_URL + endpoint, payload);
-            if (response.status === 200) {
-                const result = response.data;
-                setApiMessage({ type: 'success', text: result.status || `${buttonLabel} initiated successfully!` });
-                logMessage(`Success! Job Status: ${result.status}`);
-                fetchStats(); // Refresh stats after triggering
-            }
-        } catch (error) {
-            let errorMessage = 'Fill up the details and start using automation for Naukri.';
-            if (error.response) {
-                errorMessage = `Backend Error (${error.response.status}): ${error.response.data.detail || error.response.data}`;
-            }
-            setApiMessage({ type: 'error', text: errorMessage });
-            logMessage(`[ERROR] ${errorMessage}`, true);
-        } finally {
-            // Don't turn off loading here immediately if it's an async task that keeps running
-            // But for now, we set it to false in catch, and let the WS/task_status handle the true state
-            // Actually, handleJobTrigger sets loading to 'buttonLabel'. 
-            // If the request succeeds, the task is queued. We should keep loading true?
-            // The checkTaskStatus will eventually confirm it.
-            // But to be responsive, we can keep it true if status is 200.
-            // However, the finally block turns it off. 
-            // Let's rely on the checkTaskStatus polling or the immediate response?
-            // The user wants "real if server are connected and process is going".
-            // If I set loading=false here, there might be a flicker before checkTaskStatus or WS confirms it.
-            // But since I'm not polling checkTaskStatus in a loop (only on mount), I should probably NOT set loading to false if success.
-            // But I can't easily know if it's success in finally.
-            // I'll leave it as is for now; the user's main concern was tab switching.
-            // Wait, if I start a task, I want it to stay loading.
-            // I will remove setLoading(false) from finally and put it in catch only.
-            // And in success, I'll let the WS completion event turn it off.
+    } catch (error) {
+        let errorMessage = 'Fill up the details and start using automation for Naukri.';
+        if (error.response) {
+            errorMessage = `Backend Error (${error.response.status}): ${error.response.data.detail || error.response.data}`;
         }
-    };
+        setApiMessage({ type: 'error', text: errorMessage });
+        logMessage(`[ERROR] ${errorMessage}`, true);
+    } finally {
+        // Don't turn off loading here immediately if it's an async task that keeps running
+        // But for now, we set it to false in catch, and let the WS/task_status handle the true state
+        // Actually, handleJobTrigger sets loading to 'buttonLabel'. 
+        // If the request succeeds, the task is queued. We should keep loading true?
+        // The checkTaskStatus will eventually confirm it.
+        // But to be responsive, we can keep it true if status is 200.
+        // However, the finally block turns it off. 
+        // Let's rely on the checkTaskStatus polling or the immediate response?
+        // The user wants "real if server are connected and process is going".
+        // If I set loading=false here, there might be a flicker before checkTaskStatus or WS confirms it.
+        // But since I'm not polling checkTaskStatus in a loop (only on mount), I should probably NOT set loading to false if success.
+        // But I can't easily know if it's success in finally.
+        // I'll leave it as is for now; the user's main concern was tab switching.
+        // Wait, if I start a task, I want it to stay loading.
+        // I will remove setLoading(false) from finally and put it in catch only.
+        // And in success, I'll let the WS completion event turn it off.
+    }
+};
 
-    return (
-        <div className="min-h-screen bg-gray-50 p-6 md:p-12 font-sans text-gray-900">
-            <div className="max-w-6xl mx-auto space-y-8">
+return (
+    <div className="min-h-screen bg-gray-50 p-6 md:p-12 font-sans text-gray-900">
+        <div className="max-w-6xl mx-auto space-y-8">
 
-                {/* Header */}
-                <header className="text-center space-y-4 mb-12">
-                    <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-xl shadow-blue-100 mb-4">
-                        <Layers className="w-10 h-10 text-blue-600" />
+            {/* Header */}
+            <header className="text-center space-y-4 mb-12">
+                <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-xl shadow-blue-100 mb-4">
+                    <Layers className="w-10 h-10 text-blue-600" />
+                </div>
+                <h1 className="text-4xl md:text-5xl font-black tracking-tight text-gray-900">
+                    Job<span className="text-blue-600">Agent</span> Configuration
+                </h1>
+                <p className="text-lg text-gray-500 max-w-2xl mx-auto">
+                    Configure your autonomous agent to scrape, filter, and apply to jobs on Naukri.com with precision.
+                </p>
+            </header>
+
+            {/* API Message Alert */}
+            {apiMessage.text && (
+                <div className={`p-4 rounded-xl flex items-center gap-3 shadow-lg animate-fade-in-up ${apiMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                    <div className={`p-2 rounded-full ${apiMessage.type === 'success' ? 'bg-green-100' : 'bg-red-100'}`}>
+                        {apiMessage.type === 'success' ? <Zap className="w-5 h-5" /> : <Terminal className="w-5 h-5" />}
                     </div>
-                    <h1 className="text-4xl md:text-5xl font-black tracking-tight text-gray-900">
-                        Job<span className="text-blue-600">Agent</span> Configuration
-                    </h1>
-                    <p className="text-lg text-gray-500 max-w-2xl mx-auto">
-                        Configure your autonomous agent to scrape, filter, and apply to jobs on Naukri.com with precision.
-                    </p>
-                </header>
+                    <span className="font-medium">{apiMessage.text}</span>
+                </div>
+            )}
 
-                {/* API Message Alert */}
-                {apiMessage.text && (
-                    <div className={`p-4 rounded-xl flex items-center gap-3 shadow-lg animate-fade-in-up ${apiMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-                        <div className={`p-2 rounded-full ${apiMessage.type === 'success' ? 'bg-green-100' : 'bg-red-100'}`}>
-                            {apiMessage.type === 'success' ? <Zap className="w-5 h-5" /> : <Terminal className="w-5 h-5" />}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+                {/* Left Column: Configuration Forms */}
+                <div className="lg:col-span-2 space-y-8">
+
+                    {/* Section 1: Credentials */}
+                    <section className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-shadow duration-300">
+                        <SectionHeader icon={Key} title="Authentication" subtitle="Secure credentials for Naukri login." />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <InputField label="Email / User ID" id="username" name="username" value={formData.username} onChange={handleChange} required />
+                            <InputField label="Password" id="password" name="password" type="password" value={formData.password} onChange={handleChange} required />
                         </div>
-                        <span className="font-medium">{apiMessage.text}</span>
-                    </div>
-                )}
+                        <div className="mt-6">
+                            <ToggleSwitch id="continueSession" name="continueSession" checked={formData.continueSession} onChange={handleChange} label="Continue Existing Session (Debug Mode)" />
+                        </div>
+                    </section>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    {/* Section 2: Search Parameters */}
+                    <section className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-shadow duration-300">
+                        <SectionHeader icon={Settings} title="Search Parameters" subtitle="Define what jobs to look for." />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                            <InputField label="Target Location" id="location" name="location" icon={MapPin} value={formData.location} onChange={handleChange} required />
+                            <InputField label="Min Experience (Years)" id="experience" name="experience" type="number" icon={Briefcase} value={formData.experience} onChange={handleChange} required />
+                            <InputField label="Total Experience (Years)" id="totalExpYears" name="totalExpYears" icon={Clock} value={formData.totalExpYears} onChange={handleChange} />
+                            <InputField label="Postal Code" id="postalCode" name="postalCode" icon={Hash} value={formData.postalCode} onChange={handleChange} />
+                        </div>
+                        <TextAreaField label="Target Job Roles (Comma Separated)" id="roles" name="roles" rows="3" value={formData.roles} onChange={handleChange} required />
+                    </section>
 
-                    {/* Left Column: Configuration Forms */}
-                    <div className="lg:col-span-2 space-y-8">
+                    {/* Section 3: Tech Filters */}
+                    <section className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-shadow duration-300">
+                        <SectionHeader icon={Zap} title="Smart Filters" subtitle="AI-powered relevance matching." />
+                        <InputField label="Required Tech Keywords" id="techKeywords" name="techKeywords" value={formData.techKeywords} onChange={handleChange} placeholder="e.g. React, Node.js, AWS" />
 
-                        {/* Section 1: Credentials */}
-                        <section className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-shadow duration-300">
-                            <SectionHeader icon={Key} title="Authentication" subtitle="Secure credentials for Naukri login." />
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <InputField label="Email / User ID" id="username" name="username" value={formData.username} onChange={handleChange} required />
-                                <InputField label="Password" id="password" name="password" type="password" value={formData.password} onChange={handleChange} required />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                            <ToggleSwitch id="applyTechFilter" name="applyTechFilter" checked={formData.applyTechFilter} onChange={handleChange} label="Enforce Tech Keywords" />
+                            <ToggleSwitch id="applyMinScore" name="applyMinScore" checked={formData.applyMinScore} onChange={handleChange} label="Enforce Min Match Score" />
+                        </div>
+
+                        <div className={`mt-6 transition-all duration-300 ${formData.applyMinScore ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
+                            <div className="flex items-center justify-between mb-2">
+                                <label className="text-sm font-medium text-gray-700">Minimum Match Score: {formData.minScore}%</label>
                             </div>
-                            <div className="mt-6">
-                                <ToggleSwitch id="continueSession" name="continueSession" checked={formData.continueSession} onChange={handleChange} label="Continue Existing Session (Debug Mode)" />
+                            <input
+                                type="range"
+                                id="minScore"
+                                name="minScore"
+                                min="0"
+                                max="100"
+                                value={formData.minScore}
+                                onChange={handleChange}
+                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                            />
+                        </div>
+                    </section>
+
+                    {/* Section 4: Experience & Answers */}
+                    <section className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-shadow duration-300">
+                        <SectionHeader icon={FileText} title="Application Details" subtitle="Auto-fill data for applications." />
+
+                        <div className="mb-6">
+                            <TextAreaField label="Detailed Experience Breakdown" id="userExperience" name="userExperience" rows="3" value={formData.userExperience} onChange={handleChange} placeholder="Java 3Y, Python 2Y..." />
+                            <div className="mt-4">
+                                <ToggleSwitch id="includeUserExperience" name="includeUserExperience" checked={formData.includeUserExperience} onChange={handleChange} label="Use Custom Experience Data" />
                             </div>
-                        </section>
+                        </div>
 
-                        {/* Section 2: Search Parameters */}
-                        <section className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-shadow duration-300">
-                            <SectionHeader icon={Settings} title="Search Parameters" subtitle="Define what jobs to look for." />
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                                <InputField label="Target Location" id="location" name="location" icon={MapPin} value={formData.location} onChange={handleChange} required />
-                                <InputField label="Min Experience (Years)" id="experience" name="experience" type="number" icon={Briefcase} value={formData.experience} onChange={handleChange} required />
-                                <InputField label="Total Experience (Years)" id="totalExpYears" name="totalExpYears" icon={Clock} value={formData.totalExpYears} onChange={handleChange} />
-                                <InputField label="Postal Code" id="postalCode" name="postalCode" icon={Hash} value={formData.postalCode} onChange={handleChange} />
-                            </div>
-                            <TextAreaField label="Target Job Roles (Comma Separated)" id="roles" name="roles" rows="3" value={formData.roles} onChange={handleChange} required />
-                        </section>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <InputField label="Notice Period" id="noticePeriod" name="noticePeriod" value={formData.noticePeriod} onChange={handleChange} />
+                            <InputField label="Current CTC (Lakhs)" id="currentCtc" name="currentCtc" type="number" value={formData.currentCtc} onChange={handleChange} />
+                            <InputField label="Expected CTC (Lakhs)" id="expectedCtc" name="expectedCtc" type="number" value={formData.expectedCtc} onChange={handleChange} />
 
-                        {/* Section 3: Tech Filters */}
-                        <section className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-shadow duration-300">
-                            <SectionHeader icon={Zap} title="Smart Filters" subtitle="AI-powered relevance matching." />
-                            <InputField label="Required Tech Keywords" id="techKeywords" name="techKeywords" value={formData.techKeywords} onChange={handleChange} placeholder="e.g. React, Node.js, AWS" />
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-                                <ToggleSwitch id="applyTechFilter" name="applyTechFilter" checked={formData.applyTechFilter} onChange={handleChange} label="Enforce Tech Keywords" />
-                                <ToggleSwitch id="applyMinScore" name="applyMinScore" checked={formData.applyMinScore} onChange={handleChange} label="Enforce Min Match Score" />
-                            </div>
-
-                            <div className={`mt-6 transition-all duration-300 ${formData.applyMinScore ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
-                                <div className="flex items-center justify-between mb-2">
-                                    <label className="text-sm font-medium text-gray-700">Minimum Match Score: {formData.minScore}%</label>
+                            <div className="group">
+                                <label htmlFor="faceToFace" className="block text-sm font-medium text-gray-700 mb-1.5">F2F Availability</label>
+                                <div className="relative">
+                                    <select id="faceToFace" name="faceToFace" value={formData.faceToFace} onChange={handleChange} className="block w-full rounded-xl border-gray-200 bg-gray-50 text-gray-900 shadow-sm focus:border-blue-500 focus:ring-blue-500 focus:bg-white transition-all duration-200 sm:text-sm py-3 pl-4 pr-10 appearance-none">
+                                        <option>Yes</option>
+                                        <option>No</option>
+                                        <option>Preferred</option>
+                                        <option>Flexible</option>
+                                    </select>
+                                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                                 </div>
-                                <input
-                                    type="range"
-                                    id="minScore"
-                                    name="minScore"
-                                    min="0"
-                                    max="100"
-                                    value={formData.minScore}
-                                    onChange={handleChange}
-                                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                                />
                             </div>
-                        </section>
+                        </div>
 
-                        {/* Section 4: Experience & Answers */}
-                        <section className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 hover:shadow-xl transition-shadow duration-300">
-                            <SectionHeader icon={FileText} title="Application Details" subtitle="Auto-fill data for applications." />
+                        <div className="mt-6">
+                            <InputField label="LinkedIn URL" id="linkedinUrl" name="linkedinUrl" value={formData.linkedinUrl} onChange={handleChange} />
+                        </div>
+                    </section>
+                </div>
 
-                            <div className="mb-6">
-                                <TextAreaField label="Detailed Experience Breakdown" id="userExperience" name="userExperience" rows="3" value={formData.userExperience} onChange={handleChange} placeholder="Java 3Y, Python 2Y..." />
-                                <div className="mt-4">
-                                    <ToggleSwitch id="includeUserExperience" name="includeUserExperience" checked={formData.includeUserExperience} onChange={handleChange} label="Use Custom Experience Data" />
+                {/* Right Column: Actions & Logs */}
+                <div className="space-y-8">
+
+                    {/* Action Panel */}
+                    <div className="bg-white rounded-3xl p-6 shadow-xl shadow-blue-500/10 border border-blue-100 sticky top-8">
+                        <h3 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
+                            <Zap className="w-5 h-5 text-amber-500" />
+                            Control Center
+                        </h3>
+
+                        <div className="space-y-4">
+                            <ActionButton
+                                onClick={() => handleJobTrigger('/start_scrape', 'Scrape Only Job')}
+                                disabled={loading}
+                                loading={loading === 'Scrape Only Job'}
+                                icon={Layers}
+                                label="Start Scraping Only"
+                                colorClass="bg-gradient-to-r from-blue-600 to-blue-700"
+                            />
+                            <ActionButton
+                                onClick={() => handleJobTrigger('/start_apply', 'Apply Only Job')}
+                                disabled={loading}
+                                loading={loading === 'Apply Only Job'}
+                                icon={Send}
+                                label="Start Application Only"
+                                colorClass="bg-gradient-to-r from-amber-500 to-orange-600"
+                            />
+                            <ActionButton
+                                onClick={() => handleJobTrigger('/run_full_automation', 'Full Auto Sequence')}
+                                disabled={loading}
+                                loading={loading === 'Full Auto Sequence'}
+                                icon={RefreshCw}
+                                label="Run Full Automation"
+                                colorClass="bg-gradient-to-r from-emerald-500 to-teal-600"
+                            />
+                        </div>
+
+                        <div className="mt-8 pt-6 border-t border-gray-100">
+                            <div className="flex items-center justify-between mb-4">
+                                <h4 className="font-semibold text-gray-700 flex items-center gap-2">
+                                    <Terminal className="w-4 h-4 text-gray-400" />
+                                    Progress Dashboard
+                                </h4>
+                                {loading ? (
+                                    <span className="text-xs px-2 py-1 bg-blue-100 text-blue-600 rounded-full animate-pulse">Running</span>
+                                ) : (
+                                    <span className="text-xs px-2 py-1 bg-gray-100 text-gray-500 rounded-full">Idle</span>
+                                )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4 mb-4">
+                                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-center">
+                                    <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-1">Jobs Scraped</p>
+                                    <p className="text-3xl font-black text-blue-600">
+                                        {jobStats.scraped}
+                                    </p>
+                                </div>
+                                <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 text-center">
+                                    <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1">Jobs Applied</p>
+                                    <p className="text-3xl font-black text-amber-600">
+                                        {jobStats.applied}
+                                    </p>
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <InputField label="Notice Period" id="noticePeriod" name="noticePeriod" value={formData.noticePeriod} onChange={handleChange} />
-                                <InputField label="Current CTC (Lakhs)" id="currentCtc" name="currentCtc" type="number" value={formData.currentCtc} onChange={handleChange} />
-                                <InputField label="Expected CTC (Lakhs)" id="expectedCtc" name="expectedCtc" type="number" value={formData.expectedCtc} onChange={handleChange} />
-
-                                <div className="group">
-                                    <label htmlFor="faceToFace" className="block text-sm font-medium text-gray-700 mb-1.5">F2F Availability</label>
-                                    <div className="relative">
-                                        <select id="faceToFace" name="faceToFace" value={formData.faceToFace} onChange={handleChange} className="block w-full rounded-xl border-gray-200 bg-gray-50 text-gray-900 shadow-sm focus:border-blue-500 focus:ring-blue-500 focus:bg-white transition-all duration-200 sm:text-sm py-3 pl-4 pr-10 appearance-none">
-                                            <option>Yes</option>
-                                            <option>No</option>
-                                            <option>Preferred</option>
-                                            <option>Flexible</option>
-                                        </select>
-                                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                            <div className="bg-gray-900 rounded-xl p-4 h-[200px] overflow-y-auto font-mono text-xs shadow-inner custom-scrollbar">
+                                {log.length === 0 ? (
+                                    <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-2">
+                                        <Loader2 className="w-6 h-6 animate-spin opacity-20" />
+                                        <p>Waiting for tasks...</p>
                                     </div>
-                                </div>
-                            </div>
-
-                            <div className="mt-6">
-                                <InputField label="LinkedIn URL" id="linkedinUrl" name="linkedinUrl" value={formData.linkedinUrl} onChange={handleChange} />
-                            </div>
-                        </section>
-                    </div>
-
-                    {/* Right Column: Actions & Logs */}
-                    <div className="space-y-8">
-
-                        {/* Action Panel */}
-                        <div className="bg-white rounded-3xl p-6 shadow-xl shadow-blue-500/10 border border-blue-100 sticky top-8">
-                            <h3 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
-                                <Zap className="w-5 h-5 text-amber-500" />
-                                Control Center
-                            </h3>
-
-                            <div className="space-y-4">
-                                <ActionButton
-                                    onClick={() => handleJobTrigger('/start_scrape', 'Scrape Only Job')}
-                                    disabled={loading}
-                                    loading={loading === 'Scrape Only Job'}
-                                    icon={Layers}
-                                    label="Start Scraping Only"
-                                    colorClass="bg-gradient-to-r from-blue-600 to-blue-700"
-                                />
-                                <ActionButton
-                                    onClick={() => handleJobTrigger('/start_apply', 'Apply Only Job')}
-                                    disabled={loading}
-                                    loading={loading === 'Apply Only Job'}
-                                    icon={Send}
-                                    label="Start Application Only"
-                                    colorClass="bg-gradient-to-r from-amber-500 to-orange-600"
-                                />
-                                <ActionButton
-                                    onClick={() => handleJobTrigger('/run_full_automation', 'Full Auto Sequence')}
-                                    disabled={loading}
-                                    loading={loading === 'Full Auto Sequence'}
-                                    icon={RefreshCw}
-                                    label="Run Full Automation"
-                                    colorClass="bg-gradient-to-r from-emerald-500 to-teal-600"
-                                />
-                            </div>
-
-                            <div className="mt-8 pt-6 border-t border-gray-100">
-                                <div className="flex items-center justify-between mb-4">
-                                    <h4 className="font-semibold text-gray-700 flex items-center gap-2">
-                                        <Terminal className="w-4 h-4 text-gray-400" />
-                                        Progress Dashboard
-                                    </h4>
-                                    {loading ? (
-                                        <span className="text-xs px-2 py-1 bg-blue-100 text-blue-600 rounded-full animate-pulse">Running</span>
-                                    ) : (
-                                        <span className="text-xs px-2 py-1 bg-gray-100 text-gray-500 rounded-full">Idle</span>
-                                    )}
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-4 mb-4">
-                                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-center">
-                                        <p className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-1">Jobs Scraped</p>
-                                        <p className="text-3xl font-black text-blue-600">
-                                            {jobStats.scraped}
-                                        </p>
-                                    </div>
-                                    <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 text-center">
-                                        <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1">Jobs Applied</p>
-                                        <p className="text-3xl font-black text-amber-600">
-                                            {jobStats.applied}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <div className="bg-gray-900 rounded-xl p-4 h-[200px] overflow-y-auto font-mono text-xs shadow-inner custom-scrollbar">
-                                    {log.length === 0 ? (
-                                        <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-2">
-                                            <Loader2 className="w-6 h-6 animate-spin opacity-20" />
-                                            <p>Waiting for tasks...</p>
+                                ) : (
+                                    log.map((msg, index) => (
+                                        <div key={index} className={`mb-2 break-words ${typeof msg === 'string' && msg.includes('[ERROR]') ? 'text-red-400 border-l-2 border-red-500 pl-2' :
+                                            typeof msg === 'string' && msg.includes('Initiating') ? 'text-blue-400' :
+                                                typeof msg === 'string' && msg.includes('Success') ? 'text-green-400' :
+                                                    'text-gray-300'
+                                            }`}>
+                                            {typeof msg === 'object' ? (msg.message || JSON.stringify(msg)) : msg}
                                         </div>
-                                    ) : (
-                                        log.map((msg, index) => (
-                                            <div key={index} className={`mb-2 break-words ${typeof msg === 'string' && msg.includes('[ERROR]') ? 'text-red-400 border-l-2 border-red-500 pl-2' :
-                                                typeof msg === 'string' && msg.includes('Initiating') ? 'text-blue-400' :
-                                                    typeof msg === 'string' && msg.includes('Success') ? 'text-green-400' :
-                                                        'text-gray-300'
-                                                }`}>
-                                                {typeof msg === 'object' ? (msg.message || JSON.stringify(msg)) : msg}
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
+                                    ))
+                                )}
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
-    );
+    </div>
+);
 };
 
 export default NaukriScraperPage;

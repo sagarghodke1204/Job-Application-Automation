@@ -20,7 +20,7 @@ const RegisterPage = ({ onLogin }) => {
 
         try {
             console.log("Sending request to /auth/register", formData); // Debug log
-            const response = await axios.post('http://127.0.0.1:8000/auth/register', {
+            const response = await axios.post(`${import.meta.env.VITE_API_URL}/auth/register`, {
                 email: formData.email,
                 username: formData.name, // Use Full Name as username
                 password: formData.password

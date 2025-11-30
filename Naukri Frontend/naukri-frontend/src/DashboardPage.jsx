@@ -42,7 +42,7 @@ const DashboardPage = () => {
             setUsername(storedUser);
 
             try {
-                const response = await axios.get(`http://127.0.0.1:8000/dashboard_stats/${storedEmail}`);
+                const response = await axios.get(`${import.meta.env.VITE_API_URL}/dashboard_stats/${storedEmail}`);
                 const { overview, daily_trends, distribution } = response.data.stats;
 
                 // Transform Daily Trends for Chart
