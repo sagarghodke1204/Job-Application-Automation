@@ -36,15 +36,10 @@ const DashboardPage = () => {
     const PIE_COLORS = [COLORS.naukriDirect, COLORS.companySite, COLORS.walkIn];
 
     useEffect(() => {
-        // Load username from local storage if available
-        const storedUser = localStorage.getItem('naukriFormData');
-        if (storedUser) {
-            try {
-                const parsed = JSON.parse(storedUser);
-                if (parsed.username) setUsername(parsed.username);
-            } catch (e) {
-                console.error("Error parsing stored user data", e);
-            }
+        // Load username from local storage (set during login)
+        const appUsername = localStorage.getItem('username');
+        if (appUsername) {
+            setUsername(appUsername);
         }
     }, []);
 
