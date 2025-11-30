@@ -4,6 +4,7 @@ python-dotenv
 psycopg2-binary
 pydantic
 passlib[bcrypt]
+bcrypt==3.2.2
 python-jose[cryptography]
 selenium
 webdriver-manager
