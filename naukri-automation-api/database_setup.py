@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
