@@ -59,18 +59,41 @@ const DashboardPage = () => {
 
                 if (!response.data || !response.data.stats) return;
 
-                const { overview, distribution, daily_stats } = response.data.stats;
+                const { overview, distribution, daily_breakdown } = response.data.stats;
 
-                // Process daily_stats for chart
-                const chartData = (daily_stats || []).map(day => ({
-                    date: day.date,
-                    "Naukri Direct": day.applied || 0,
-                    "Company Site": 0, // Placeholder
-                    "Walk-in": 0,      // Placeholder
-                    total: day.total
-                }));
+                // Process daily_breakdown for chart
+                const chartDataMap = {};
 
-                // Map application_notes to categories
+                // Helper to format date as YYYY-MM-DD
+                const formatDate = (dateStr) => {
+                    const d = new Date(dateStr);
+                    return d.toISOString().split('T')[0];
+                };
+
+                // Initialize map with data from daily_breakdown
+                (daily_breakdown || []).forEach(item => {
+                    const date = formatDate(item.date);
+                    if (!chartDataMap[date]) {
+                        chartDataMap[date] = { date: date, "Naukri Direct": 0, "Company Site": 0, "Walk-in": 0, total: 0 };
+                    }
+
+                    const note = (item.application_notes || "").toLowerCase();
+                    const count = item.count;
+
+                    if (note.includes("walkin") || note.includes("walk-in")) {
+                        chartDataMap[date]["Walk-in"] += count;
+                    } else if (note.includes("company") || note.includes("external")) {
+                        chartDataMap[date]["Company Site"] += count;
+                    } else {
+                        chartDataMap[date]["Naukri Direct"] += count;
+                    }
+                    chartDataMap[date].total += count;
+                });
+
+                // Convert map to array and sort by date
+                const chartData = Object.values(chartDataMap).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+                // Map application_notes to categories for stats
                 let naukriCount = 0;
                 let companyCount = 0;
                 let walkInCount = 0;

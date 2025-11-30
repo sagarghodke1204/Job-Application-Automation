@@ -190,12 +190,27 @@ def get_job_summary(email: str, days: int = 7) -> Dict[str, Any]:
     """, (email,))
     distribution = c.fetchall()
 
+    # 4. Daily Breakdown (New for Bar Chart)
+    c.execute("""
+        SELECT 
+            DATE(timestamp) as date,
+            application_notes,
+            COUNT(*) as count
+        FROM scraped_jobs
+        WHERE username = %s 
+        AND timestamp >= NOW() - INTERVAL '%s days'
+        GROUP BY date, application_notes
+        ORDER BY date ASC
+    """, (email, days))
+    daily_breakdown = c.fetchall()
+
     c.close(); conn.close()
     
     return {
         "overview": dict(overview),
-        "daily_trends": [dict(row) for row in daily_trends],
-        "distribution": [dict(row) for row in distribution]
+        "daily_stats": [dict(row) for row in daily_trends], # Renamed from daily_trends to match frontend
+        "distribution": [dict(row) for row in distribution],
+        "daily_breakdown": [dict(row) for row in daily_breakdown]
     }
 
 # --- JOB WRITING ---

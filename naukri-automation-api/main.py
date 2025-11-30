@@ -35,7 +35,7 @@ SECRET_KEY = os.getenv("SECRET_KEY", "super_secret_key_change_this")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 3650 
 
-MAX_CONCURRENT_USERS = 2 
+MAX_CONCURRENT_USERS = 4 
 server_semaphore = threading.Semaphore(MAX_CONCURRENT_USERS)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
