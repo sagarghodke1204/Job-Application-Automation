@@ -19,7 +19,7 @@ def get_db_connection():
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL environment variable is not set.")
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        conn = psycopg2.connect(DATABASE_URL, sslmode='prefer')
         return conn
     except Exception as e:
         print(f"[DB Error] Could not connect to PostgreSQL: {e}")
