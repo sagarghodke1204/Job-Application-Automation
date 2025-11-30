@@ -3,6 +3,8 @@ import axios from 'axios';
 import { Link, useNavigate } from 'react-router-dom';
 import { Layers, User, Mail, Lock, ArrowRight, Loader2, Eye, EyeOff } from 'lucide-react';
 
+import { API_URL } from './config';
+
 const RegisterPage = ({ onLogin }) => {
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
@@ -20,7 +22,7 @@ const RegisterPage = ({ onLogin }) => {
 
         try {
             console.log("Sending request to /auth/register", formData); // Debug log
-            const response = await axios.post(`${import.meta.env.VITE_API_URL}/auth/register`, {
+            const response = await axios.post(`${API_URL}/auth/register`, {
                 email: formData.email,
                 username: formData.name, // Use Full Name as username
                 password: formData.password
