@@ -19,6 +19,7 @@ import { API_URL } from './config';
 const DashboardPage = () => {
     const [data, setData] = useState([]);
     const [username, setUsername] = useState('Guest');
+    const [email, setEmail] = useState(null);
     const [stats, setStats] = useState({
         total: 0,
         naukriDirect: 0,
@@ -36,19 +37,25 @@ const DashboardPage = () => {
     const PIE_COLORS = [COLORS.naukriDirect, COLORS.companySite, COLORS.walkIn];
 
     useEffect(() => {
-        // Load username from local storage (set during login)
+        // Load username and email from local storage (set during login)
         const appUsername = localStorage.getItem('username');
+        const appEmail = localStorage.getItem('email');
+
         if (appUsername) {
             setUsername(appUsername);
+        }
+        if (appEmail) {
+            setEmail(appEmail);
         }
     }, []);
 
     useEffect(() => {
         const fetchStats = async () => {
-            if (username === 'Guest') return;
+            if (!email) return;
 
             try {
-                const response = await axios.get(`${API_URL}/dashboard_stats/${username}`);
+                // Use email for fetching data as per database schema
+                const response = await axios.get(`${API_URL}/dashboard_stats/${email}`);
 
                 if (!response.data || !response.data.stats) return;
 
@@ -96,7 +103,7 @@ const DashboardPage = () => {
         };
 
         fetchStats();
-    }, [username]);
+    }, [email]);
 
     const pieData = [
         { name: 'Naukri Direct', value: stats.naukriDirect },
