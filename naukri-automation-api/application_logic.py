@@ -16,20 +16,22 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException, SessionNotCreatedException
+from webdriver_manager.chrome import ChromeDriverManager
+from chrome_utils import get_driver_path
 
 from database_setup import get_pending_jobs, update_job_status
 
 try:
-    import openai
+    from groq import Groq
 except ImportError:
-    openai = None
+    Groq = None
 
-OPENAI_API_KEY = "" 
-AI_MODEL = "gemini-2.5-flash"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "") 
+AI_MODEL = "llama3-8b-8192"
 client = None
-if OPENAI_API_KEY and openai:
-    try: client = openai.OpenAI(api_key=OPENAI_API_KEY)
+if GROQ_API_KEY and Groq:
+    try: client = Groq(api_key=GROQ_API_KEY)
     except: pass
 
 class ApplicationEngine:
@@ -65,13 +67,17 @@ class ApplicationEngine:
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
         try:
-            self.driver = uc.Chrome(options=options, headless=True, use_subprocess=True)
+            driver_path = get_driver_path()
+            self.driver = uc.Chrome(options=options, headless=True, use_subprocess=True, driver_executable_path=driver_path)
             self.driver.set_page_load_timeout(60) 
             self.wait = WebDriverWait(self.driver, 20)
             self.log(">>> Browser Ready.")
+        except SessionNotCreatedException as e:
+            self.log(f"[CRITICAL] SessionNotCreatedException: {e}")
+            raise e
         except Exception as e:
             self.log(f"[CRITICAL] Driver setup failed: {e}")
-            raise
+            raise e
 
     def _login_to_naukri(self, email, password):
         self._setup_driver()
@@ -119,9 +125,9 @@ class ApplicationEngine:
         if "location" in q_lower or "city" in q_lower: return str(context.get("CURRENT_LOCATION", "India"))
 
         if not client: return "Yes"
-        prompt = f"You are a candidate. Profile: {json.dumps(context)}. Question: '{question}'. Rules: 1. Reply with ONLY the value (e.g. 'Yes', '3', 'Pune'). 2. No sentences. Answer:"
+        prompt = f"You are a candidate applying for a job. Candidate Profile: {json.dumps(context)}. Job Description (if any): {context.get('JOB_DESCRIPTION', 'None')}. Question: '{question}'. Rules: 1. Read the profile and job description to figure out the best answer. 2. Reply with ONLY the exact value needed (e.g. 'Yes', '3', 'Pune'). 3. No sentences, no explanations. Answer:"
         try:
-            resp = client.chat.completions.create(model=AI_MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=10)
+            resp = client.chat.completions.create(model=AI_MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=15)
             return re.sub(r'^["\']|["\']$', '', resp.choices[0].message.content.strip())
         except: return "Yes"
 
@@ -137,9 +143,11 @@ class ApplicationEngine:
                 return True
             except: return False
 
-    def _handle_chatbot_interaction(self, job_id):
+    def _handle_chatbot_interaction(self, job_id, job_description=""):
         self.log(f"    [Bot] Interaction STARTING...")
         ai_ctx = self.resume_data.copy()
+        if job_description:
+            ai_ctx['JOB_DESCRIPTION'] = job_description
         
         # 1. Capture "Chatbot Opened" evidence
         
@@ -181,11 +189,58 @@ class ApplicationEngine:
                         rads = self.driver.find_elements(By.CSS_SELECTOR, ".singleselect-radiobutton")
                         if rads and rads[0].is_displayed():
                             labels = rads[0].find_elements(By.TAG_NAME, "label")
-                            choice = labels[0]
-                            self.log(f"      [Action] Radio: '{choice.text}'")
-                            try: choice.find_element(By.XPATH, "./preceding-sibling::input").click()
-                            except: choice.click()
+                            if labels:
+                                choice = labels[0]
+                                self.log(f"      [Action] Radio: '{choice.text}'")
+                                try: choice.find_element(By.XPATH, "./preceding-sibling::input").click()
+                                except: self.driver.execute_script("arguments[0].click();", choice)
+                                action_taken = True
+                    except: pass
+
+                # Checkbox Input
+                if not action_taken:
+                    try:
+                        checkboxes = self.driver.find_elements(By.CSS_SELECTOR, ".multiselect-checkbox label, input[type='checkbox']")
+                        if checkboxes and checkboxes[0].is_displayed():
+                            choice = checkboxes[0]
+                            self.log(f"      [Action] Checkbox: '{choice.text}'")
+                            self.driver.execute_script("arguments[0].click();", choice)
                             action_taken = True
+                    except: pass
+
+                # Dropdown Input
+                if not action_taken:
+                    try:
+                        dropdowns = self.driver.find_elements(By.CSS_SELECTOR, "select, .dropdown, [class*='select']")
+                        if dropdowns and dropdowns[0].is_displayed():
+                            dd = dropdowns[0]
+                            # Try to open it if it's a custom div dropdown
+                            if dd.tag_name != "select":
+                                self.driver.execute_script("arguments[0].click();", dd)
+                                time.sleep(0.5)
+                            
+                            options = dd.find_elements(By.TAG_NAME, "option")
+                            if not options:
+                                options = self.driver.find_elements(By.CSS_SELECTOR, "li, [class*='option'], [class*='item']")
+                            
+                            # Filter visible options
+                            visible_options = [opt for opt in options if opt.is_displayed() and opt.text.strip()]
+                            
+                            if visible_options:
+                                opts_text = [opt.text.strip() for opt in visible_options]
+                                ans = self._get_ai_answer(q_text + f" Options available: {', '.join(opts_text)}", ai_ctx)
+                                self.log(f"      [Action] Dropdown AI picked: {ans}")
+                                
+                                clicked = False
+                                for opt in visible_options:
+                                    if ans.lower() in opt.text.lower() or opt.text.lower() in ans.lower():
+                                        self.driver.execute_script("arguments[0].click();", opt)
+                                        clicked = True
+                                        break
+                                
+                                if not clicked:
+                                    self.driver.execute_script("arguments[0].click();", visible_options[0])
+                                action_taken = True
                     except: pass
 
                 if action_taken:
@@ -199,9 +254,9 @@ class ApplicationEngine:
 
         return True 
 
-    def _process_popup_logic(self, job_id):
+    def _process_popup_logic(self, job_id, job_description=""):
         if self.driver.find_elements(By.CLASS_NAME, "chatbot_Drawer"): 
-            return self._handle_chatbot_interaction(job_id)
+            return self._handle_chatbot_interaction(job_id, job_description)
         return False
         
     def _quit_driver(self):
@@ -308,7 +363,7 @@ class ApplicationEngine:
                             time.sleep(1.5)
 
                             # A. Check Chatbot
-                            if self._process_popup_logic(job_id):
+                            if self._process_popup_logic(job_id, job.get('Description', '')):
                                 update_job_status(job_id, 'APPLIED', 'AI Chatbot success.')
                                 self.log("    -> Chatbot Completed.")
                                 self.applied_count += 1
@@ -340,7 +395,7 @@ class ApplicationEngine:
                                 else:
                                     time.sleep(1.0)
                                     self._save_debug_evidence(job_id, "2_Errormsg_btn")
-                                    update_job_status(job_id, 'APPLIED', 'Direct apply (Unverified).')
+                                    update_job_status(job_id, 'PENDING', 'Direct apply (Unverified).')
                                     self.applied_count += 1
                                     self.log({
                                         "type": "progress",

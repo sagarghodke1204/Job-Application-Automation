@@ -15,10 +15,51 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+import socket
+
 def get_db_connection():
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL environment variable is not set.")
     try:
+        # Hack to force IPv4 resolution for Supabase/Remote DBs in Docker
+        # because Docker sometimes prefers unreachable IPv6 addresses.
+        # ONLY apply this when running in Docker to avoid breaking local SSL verification.
+        if os.getenv("RUNNING_IN_DOCKER") == "true":
+            try:
+                from urllib.parse import urlparse
+                import socket
+                
+                url = urlparse(DATABASE_URL)
+                hostname = url.hostname
+                ipv4_ip = None
+
+                # Method 1: Try simple gethostbyname (usually returns IPv4)
+                try:
+                    ipv4_ip = socket.gethostbyname(hostname)
+                    print(f"[DB Info] Resolved {hostname} to {ipv4_ip} via gethostbyname")
+                except Exception as e_simple:
+                    print(f"[DB Info] gethostbyname failed: {e_simple}")
+
+                # Method 2: Fallback to getaddrinfo if Method 1 failed
+                if not ipv4_ip and hostname:
+                    info = socket.getaddrinfo(hostname, url.port or 5432, family=socket.AF_INET, proto=socket.IPPROTO_TCP)
+                    if info:
+                        ipv4_ip = info[0][4][0]
+                        print(f"[DB Info] Resolved {hostname} to {ipv4_ip} via getaddrinfo")
+
+                if ipv4_ip:
+                    # Rewrite the URL with the IP address
+                    final_db_url = DATABASE_URL.replace(hostname, ipv4_ip)
+                    print(f"[DB Info] Connecting to {ipv4_ip}...")
+                    conn = psycopg2.connect(final_db_url, sslmode='prefer')
+                    return conn
+                else:
+                    print(f"[DB Warning] Could not resolve {hostname} to IPv4. Using default.")
+
+            except Exception as e:
+                print(f"[DB Warning] IPv4 resolution hack failed: {e}. Falling back to default URL.")
+
+        # Default connection (Local execution & Fallback)
         conn = psycopg2.connect(DATABASE_URL, sslmode='prefer')
         return conn
     except Exception as e:
@@ -303,3 +344,37 @@ def update_job_status(job_id: int, status: str, notes: str):
     c = conn.cursor()
     c.execute("UPDATE scraped_jobs SET applied_status = %s, applied_timestamp = NOW(), application_notes = %s WHERE id = %s", (status, notes, job_id))
     conn.commit(); c.close(); conn.close()
+
+def get_external_jobs(username: str) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
+    c.execute("SELECT id, title, company, apply_link FROM scraped_jobs WHERE applied_status = 'EXTERNAL' AND username = %s ORDER BY timestamp DESC", (username,))
+    jobs = c.fetchall()
+    c.close(); conn.close()
+    
+    clean_jobs = []
+    for row in jobs:
+        clean_jobs.append({
+            "id": row.get('id'),
+            "Title": row.get('title'),
+            "Company": row.get('company'),
+            "Apply_Link": row.get('apply_link')
+        })
+    return clean_jobs
+
+def get_walkin_jobs(username: str) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
+    c.execute("SELECT id, title, company, apply_link FROM scraped_jobs WHERE applied_status = 'WALK-IN' AND username = %s ORDER BY timestamp DESC", (username,))
+    jobs = c.fetchall()
+    c.close(); conn.close()
+    
+    clean_jobs = []
+    for row in jobs:
+        clean_jobs.append({
+            "id": row.get('id'),
+            "Title": row.get('title'),
+            "Company": row.get('company'),
+            "Apply_Link": row.get('apply_link')
+        })
+    return clean_jobs

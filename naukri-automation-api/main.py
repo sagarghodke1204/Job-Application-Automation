@@ -25,7 +25,7 @@ from scraper_logic import ScraperEngine, parse_user_experience_input
 from application_logic import ApplicationEngine 
 from database_setup import (
     write_jobs_to_db, init_db, upsert_user_config, get_user_config, 
-    get_job_summary, create_website_user, get_website_user
+    get_job_summary, create_website_user, get_website_user, get_external_jobs, get_walkin_jobs
 )
 
 load_dotenv()
@@ -365,6 +365,16 @@ async def dashboard_stats(email: str, days: int = 7):
     stats = get_job_summary(email, days)
     return {"email": email, "stats": stats}
 
+@app.get("/external_jobs/{email}")
+async def external_jobs(email: str):
+    jobs = get_external_jobs(email)
+    return {"email": email, "jobs": jobs}
+
+@app.get("/walkin_jobs/{email}")
+async def walkin_jobs(email: str):
+    jobs = get_walkin_jobs(email)
+    return {"email": email, "jobs": jobs}
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)

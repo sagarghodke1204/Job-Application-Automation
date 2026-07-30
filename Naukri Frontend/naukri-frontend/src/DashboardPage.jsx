@@ -13,7 +13,7 @@ import {
     Pie,
     Cell
 } from 'recharts';
-import { Briefcase, Building2, UserCheck, MousePointerClick, TrendingUp, PieChart as PieIcon, User } from 'lucide-react';
+import { Briefcase, Building2, UserCheck, MousePointerClick, TrendingUp, PieChart as PieIcon, User, ExternalLink } from 'lucide-react';
 import { API_URL } from './config';
 
 const DashboardPage = () => {
@@ -26,6 +26,8 @@ const DashboardPage = () => {
         companySite: 0,
         walkIn: 0
     });
+    const [externalJobs, setExternalJobs] = useState([]);
+    const [walkinJobs, setWalkinJobs] = useState([]);
 
     // Colors
     const COLORS = {
@@ -125,7 +127,33 @@ const DashboardPage = () => {
             }
         };
 
+        const fetchExternalJobs = async () => {
+            if (!email) return;
+            try {
+                const response = await axios.get(`${API_URL}/external_jobs/${email}`);
+                if (response.data && response.data.jobs) {
+                    setExternalJobs(response.data.jobs);
+                }
+            } catch (error) {
+                console.error("Failed to fetch external jobs:", error);
+            }
+        };
+
+        const fetchWalkinJobs = async () => {
+            if (!email) return;
+            try {
+                const response = await axios.get(`${API_URL}/walkin_jobs/${email}`);
+                if (response.data && response.data.jobs) {
+                    setWalkinJobs(response.data.jobs);
+                }
+            } catch (error) {
+                console.error("Failed to fetch walkin jobs:", error);
+            }
+        };
+
         fetchStats();
+        fetchExternalJobs();
+        fetchWalkinJobs();
     }, [email]);
 
     const pieData = [
@@ -277,6 +305,96 @@ const DashboardPage = () => {
                     </div>
 
                 </div>
+
+                {/* External Applications List */}
+                {externalJobs.length > 0 && (
+                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mt-8">
+                        <div className="flex items-center justify-between mb-6">
+                            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                <ExternalLink className="w-5 h-5 text-gray-500" />
+                                External Applications (Action Required)
+                            </h2>
+                            <span className="bg-amber-100 text-amber-700 text-xs font-bold px-3 py-1 rounded-full">
+                                {externalJobs.length} Links
+                            </span>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                                <thead>
+                                    <tr className="border-b border-gray-200 text-sm font-semibold text-gray-500 uppercase tracking-wider">
+                                        <th className="py-3 px-4">Job Title</th>
+                                        <th className="py-3 px-4">Company</th>
+                                        <th className="py-3 px-4 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {externalJobs.map((job) => (
+                                        <tr key={job.id} className="hover:bg-gray-50 transition-colors">
+                                            <td className="py-4 px-4 font-medium text-gray-900">{job.Title}</td>
+                                            <td className="py-4 px-4 text-gray-600">{job.Company}</td>
+                                            <td className="py-4 px-4 text-right">
+                                                <a 
+                                                    href={job.Apply_Link} 
+                                                    target="_blank" 
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 text-sm font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition-colors"
+                                                >
+                                                    Apply Here
+                                                    <ExternalLink className="w-4 h-4" />
+                                                </a>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
+                {/* Walk-in Drives List */}
+                {walkinJobs.length > 0 && (
+                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mt-8">
+                        <div className="flex items-center justify-between mb-6">
+                            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                <UserCheck className="w-5 h-5 text-gray-500" />
+                                Walk-in Drives (Direct Action)
+                            </h2>
+                            <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-3 py-1 rounded-full">
+                                {walkinJobs.length} Drives
+                            </span>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                                <thead>
+                                    <tr className="border-b border-gray-200 text-sm font-semibold text-gray-500 uppercase tracking-wider">
+                                        <th className="py-3 px-4">Job Title</th>
+                                        <th className="py-3 px-4">Company</th>
+                                        <th className="py-3 px-4 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {walkinJobs.map((job) => (
+                                        <tr key={job.id} className="hover:bg-gray-50 transition-colors">
+                                            <td className="py-4 px-4 font-medium text-gray-900">{job.Title}</td>
+                                            <td className="py-4 px-4 text-gray-600">{job.Company}</td>
+                                            <td className="py-4 px-4 text-right">
+                                                <a 
+                                                    href={job.Apply_Link} 
+                                                    target="_blank" 
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 text-sm font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition-colors"
+                                                >
+                                                    View Details
+                                                    <ExternalLink className="w-4 h-4" />
+                                                </a>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

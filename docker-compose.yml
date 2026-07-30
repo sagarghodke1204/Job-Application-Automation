@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./naukri-automation-api
+      dockerfile: Dockerfile
+    container_name: naukri-backend
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./naukri-automation-api:/app
+      - ./naukri-automation-api/debug_logs:/app/debug_logs
+    env_file:
+      - ./naukri-automation-api/.env
+    environment:
+      - RUNNING_IN_DOCKER=true
+    dns:
+      - 8.8.8.8
+    # shm_size and privileged are often needed for Chrome/Selenium in Docker
+    shm_size: '2gb'
+    privileged: true
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: "./Naukri Frontend/naukri-frontend"
+      dockerfile: Dockerfile
+    container_name: naukri-frontend
+    ports:
+      - "80:80"
+      - "3000:80" # Optional: map 3000 as well if accustomed to it, but 80 is standard
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  debug_logs:

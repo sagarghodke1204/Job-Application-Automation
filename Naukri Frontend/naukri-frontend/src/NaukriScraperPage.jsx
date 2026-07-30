@@ -207,11 +207,21 @@ const NaukriScraperPage = () => {
         try {
             const response = await axios.get(`${BACKEND_URL}/task_status/${formData.username}`);
             if (response.data?.is_running) {
-                setLoading(response.data.status); // Set loading to the actual status message
+                // Only update if we are not already in a specific loading state (start-up)
+                // or if we want to reflect the exact backend status.
+                // For now, we keep it simple: if running, ensure we are truthy.
+                // If we want to preserve the specific button spinner, we might check if 'loading' is already set.
+                // But generally, keeping it sync with backend is safer for "stuck" states.
+                if (loading === false) {
+                    setLoading(response.data.status);
+                }
+
                 // Only add resumption log if it's not the very last message already
                 setLog(prev => {
                     if (prev.length > 0 && typeof prev[0] === 'string' && prev[0].includes("Resuming")) return prev;
-                    return [`[System] Resuming session: ${response.data.status}...`, ...prev].slice(0, 100);
+                    if (prev.length > 0 && typeof prev[0] === 'string' && prev[0].includes(response.data.status)) return prev;
+                    return prev; // Don't spam logs on polling
+                    // return [`[System] Resuming session: ${response.data.status}...`, ...prev].slice(0, 100);
                 });
             } else {
                 setLoading(false);
@@ -220,6 +230,21 @@ const NaukriScraperPage = () => {
             console.error("Failed to check task status:", error);
         }
     };
+
+    // Polling Effect: Check status every 3 seconds if loading
+    useEffect(() => {
+        let intervalId;
+        if (loading) {
+            intervalId = setInterval(() => {
+                checkTaskStatus();
+                // Also refresh stats periodically while running
+                fetchStats();
+            }, 3000);
+        }
+        return () => {
+            if (intervalId) clearInterval(intervalId);
+        };
+    }, [loading, formData.username]);
 
     // WebSocket Connection
     useEffect(() => {
@@ -255,6 +280,12 @@ const NaukriScraperPage = () => {
                     setLoading(false);
                     setApiMessage({ type: 'success', text: data.message });
                     fetchStats();
+
+                    if (data.action === 'scrape_complete') {
+                        setLog(prev => [`[${timestamp}] [SUCCESS] Scraping Done. You can now start the Application process.`, ...prev].slice(0, 100));
+                    } else if (data.action === 'apply_complete') {
+                        setLog(prev => [`[${timestamp}] [SUCCESS] Application process finished.`, ...prev].slice(0, 100));
+                    }
                 }
 
             } catch (e) {
@@ -338,9 +369,11 @@ const NaukriScraperPage = () => {
                 fetchStats(); // Refresh stats after triggering
             }
         } catch (error) {
-            let errorMessage = 'Fill up the details and start using automation for Naukri.';
+            let errorMessage = 'Failed to connect to the backend server. Please ensure it is running.';
             if (error.response) {
                 errorMessage = `Backend Error (${error.response.status}): ${error.response.data.detail || error.response.data}`;
+            } else if (error.message) {
+                errorMessage = `Error: ${error.message}`;
             }
             setApiMessage({ type: 'error', text: errorMessage });
             logMessage(`[ERROR] ${errorMessage}`, true);

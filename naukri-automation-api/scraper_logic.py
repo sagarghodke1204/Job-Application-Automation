@@ -16,6 +16,9 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import SessionNotCreatedException
+from webdriver_manager.chrome import ChromeDriverManager
+from chrome_utils import get_driver_path, get_chrome_major_version
 
 # ---------------------------
 # Helper utilities
@@ -163,11 +166,30 @@ class ScraperEngine:
         options.add_argument("--blink-settings=imagesEnabled=false")
         
         try:
-            self.driver = uc.Chrome(options=options, headless=True, use_subprocess=True)
+            self.log("[DEBUG] Fetching driver path...")
+            driver_path = get_driver_path()
+            self.log(f"[DEBUG] Driver path fetched: {driver_path}")
+            
+            self.log("[DEBUG] Fetching major version...")
+            major_version = get_chrome_major_version()
+            self.log(f"[DEBUG] Major version fetched: {major_version}")
+            
+            # Use 'headless=new' instead of 'True' if needed, but let's stick to True 
+            # and add more debugs before we suspect it.
+            if major_version:
+                self.log(f"Passing version_main={major_version} to undetected_chromedriver")
+                self.log("[DEBUG] Calling uc.Chrome with major_version...")
+                self.driver = uc.Chrome(options=options, headless=True, use_subprocess=True, driver_executable_path=driver_path, version_main=major_version)
+            else:
+                self.log("[DEBUG] Calling uc.Chrome without major_version...")
+                self.driver = uc.Chrome(options=options, headless=True, use_subprocess=True, driver_executable_path=driver_path)
             self.log("Browser Ready.")
+        except SessionNotCreatedException as e:
+            self.log(f"[CRITICAL] SessionNotCreatedException: {e}")
+            raise e
         except Exception as e:
             self.log(f"[CRITICAL] Driver setup failed: {e}")
-            raise
+            raise e
 
     def random_delay(self, min_sec=1.5, max_sec=3.5):
         time.sleep(random.uniform(min_sec, max_sec))
@@ -260,10 +282,13 @@ class ScraperEngine:
                 self.random_delay(3, 5)
 
                 try:
+                    self.log("    [INFO] Attempting to apply 'Date' sort filter...")
                     wait.until(EC.element_to_be_clickable((By.ID, "filter-sort"))).click()
                     wait.until(EC.element_to_be_clickable((By.XPATH, "//li[@title='Date']"))).click()
                     time.sleep(2)
-                except: pass
+                    self.log("    [INFO] 'Date' sort filter applied successfully.")
+                except Exception as e:
+                    self.log(f"    [WARNING] Failed to apply 'Date' sort filter: {e}")
 
                 # 2. Pagination
                 for page_num in range(1, 11): 
