@@ -176,11 +176,61 @@ const NaukriScraperPage = () => {
     const [loading, setLoading] = useState(false);
     const [apiMessage, setApiMessage] = useState({ type: '', text: '' });
     const wsRef = useRef(null);
+    
+    // Auto Apply & Pause States
+    const [autoApplyCountdown, setAutoApplyCountdown] = useState(null);
+    const [isPaused, setIsPaused] = useState(false);
+    const countdownRef = useRef(null);
+    const pendingAutoApplyRef = useRef(false); // Ref for WS closure
 
     // Save to localStorage whenever formData changes
     useEffect(() => {
         localStorage.setItem('naukriFormData', JSON.stringify(formData));
     }, [formData]);
+
+    const togglePause = async () => {
+        if (!formData.username) return;
+        const endpoint = isPaused ? `/resume_task/${formData.username}` : `/pause_task/${formData.username}`;
+        try {
+            await axios.post(BACKEND_URL + endpoint);
+            setIsPaused(!isPaused);
+            logMessage(`Task ${isPaused ? 'Resumed' : 'Paused'} by user.`);
+        } catch (error) {
+            logMessage(`[ERROR] Failed to toggle pause state.`, true);
+        }
+    };
+
+    const stopTask = async () => {
+        if (!formData.username) return;
+        try {
+            await axios.post(`${BACKEND_URL}/stop_task/${formData.username}`);
+            setLoading(false);
+            setIsPaused(false);
+            setAutoApplyCountdown(null);
+            pendingAutoApplyRef.current = false;
+            logMessage(`[SYSTEM] Task forcibly stopped by user.`);
+            setApiMessage({ type: 'error', text: 'Process stopped.' });
+        } catch (error) {
+            logMessage(`[ERROR] Failed to stop task.`, true);
+        }
+    };
+
+    // Countdown Effect
+    useEffect(() => {
+        if (autoApplyCountdown === null) return;
+        
+        if (autoApplyCountdown > 0) {
+            countdownRef.current = setTimeout(() => {
+                setAutoApplyCountdown(prev => prev - 1);
+            }, 1000);
+        } else if (autoApplyCountdown === 0) {
+            setAutoApplyCountdown(null);
+            pendingAutoApplyRef.current = false;
+            handleJobTrigger('/start_apply', 'Apply Only Job (Auto)');
+        }
+        
+        return () => clearTimeout(countdownRef.current);
+    }, [autoApplyCountdown]);
 
     // Save logs to localStorage whenever they change (limit to 100)
     useEffect(() => {
@@ -215,6 +265,7 @@ const NaukriScraperPage = () => {
                 if (loading === false) {
                     setLoading(response.data.status);
                 }
+                setIsPaused(response.data.is_paused);
 
                 // Only add resumption log if it's not the very last message already
                 setLog(prev => {
@@ -282,8 +333,16 @@ const NaukriScraperPage = () => {
                     fetchStats();
 
                     if (data.action === 'scrape_complete') {
-                        setLog(prev => [`[${timestamp}] [SUCCESS] Scraping Done. You can now start the Application process.`, ...prev].slice(0, 100));
+                        if (pendingAutoApplyRef.current) {
+                            setLog(prev => [`[${timestamp}] [SUCCESS] Scraping Done. Auto-applying in 30 seconds...`, ...prev].slice(0, 100));
+                            setAutoApplyCountdown(30);
+                        } else {
+                            setLoading(false);
+                            setLog(prev => [`[${timestamp}] [SUCCESS] Scraping Done. You can now start the Application process.`, ...prev].slice(0, 100));
+                        }
                     } else if (data.action === 'apply_complete') {
+                        setLoading(false);
+                        pendingAutoApplyRef.current = false;
                         setLog(prev => [`[${timestamp}] [SUCCESS] Application process finished.`, ...prev].slice(0, 100));
                     }
                 }
@@ -349,6 +408,26 @@ const NaukriScraperPage = () => {
     });
 
     const handleJobTrigger = async (endpoint, buttonLabel) => {
+        if (loading) {
+            const confirmStop = window.confirm(`A task (${loading}) is currently running. Do you want to stop it and start "${buttonLabel}" instead?`);
+            if (!confirmStop) return;
+            
+            // Stop current task
+            await stopTask();
+            // Give backend a moment to clean up resources
+            await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+        
+        if (endpoint === '/run_full_automation') {
+            pendingAutoApplyRef.current = true;
+            endpoint = '/start_scrape';
+        } else if (endpoint === '/start_apply') {
+            setAutoApplyCountdown(null);
+            pendingAutoApplyRef.current = false;
+        } else {
+            pendingAutoApplyRef.current = false;
+        }
+
         if (!formData.username || !formData.password) {
             setApiMessage({ type: 'error', text: "Naukri credentials are required." });
             return;
@@ -510,10 +589,17 @@ const NaukriScraperPage = () => {
                                 Control Center
                             </h3>
 
+                            {autoApplyCountdown !== null && (
+                                <div className="mb-4 p-4 rounded-xl bg-indigo-50 border border-indigo-200 text-center animate-pulse shadow-sm">
+                                    <p className="text-indigo-800 font-bold text-lg">Auto-Applying in {autoApplyCountdown}s...</p>
+                                    <p className="text-xs text-indigo-600 mt-1">Click "Start Application Only" to apply instantly</p>
+                                </div>
+                            )}
+
                             <div className="space-y-4">
                                 <ActionButton
                                     onClick={() => handleJobTrigger('/start_scrape', 'Scrape Only Job')}
-                                    disabled={loading}
+                                    
                                     loading={loading === 'Scrape Only Job'}
                                     icon={Layers}
                                     label="Start Scraping Only"
@@ -521,7 +607,7 @@ const NaukriScraperPage = () => {
                                 />
                                 <ActionButton
                                     onClick={() => handleJobTrigger('/start_apply', 'Apply Only Job')}
-                                    disabled={loading}
+                                    
                                     loading={loading === 'Apply Only Job'}
                                     icon={Send}
                                     label="Start Application Only"
@@ -529,13 +615,32 @@ const NaukriScraperPage = () => {
                                 />
                                 <ActionButton
                                     onClick={() => handleJobTrigger('/run_full_automation', 'Full Auto Sequence')}
-                                    disabled={loading}
+                                    
                                     loading={loading === 'Full Auto Sequence'}
                                     icon={RefreshCw}
                                     label="Run Full Automation"
                                     colorClass="bg-gradient-to-r from-emerald-500 to-teal-600"
                                 />
                             </div>
+
+                            {loading && (
+                                <div className="mt-4 pt-4 border-t border-blue-50 grid grid-cols-2 gap-3">
+                                    <button
+                                        onClick={togglePause}
+                                        className={`w-full py-3 rounded-xl font-bold text-white shadow-lg transition-all duration-300 hover:-translate-y-1 ${
+                                            isPaused ? 'bg-green-600 hover:bg-green-700' : 'bg-amber-500 hover:bg-amber-600'
+                                        }`}
+                                    >
+                                        {isPaused ? '▶ Resume' : '⏸ Pause'}
+                                    </button>
+                                    <button
+                                        onClick={stopTask}
+                                        className="w-full py-3 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg transition-all duration-300 hover:-translate-y-1"
+                                    >
+                                        🛑 Stop
+                                    </button>
+                                </div>
+                            )}
 
                             <div className="mt-8 pt-6 border-t border-gray-100">
                                 <div className="flex items-center justify-between mb-4">

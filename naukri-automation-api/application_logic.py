@@ -35,7 +35,8 @@ if GROQ_API_KEY and Groq:
     except: pass
 
 class ApplicationEngine:
-    def __init__(self, log_callback=None):
+    def __init__(self, log_callback=None, pause_check=None):
+        self.pause_check = pause_check
         self.log_callback = log_callback if log_callback else print
         self.driver = None
         self.resume_data: Dict[str, str] = {} 
@@ -276,6 +277,7 @@ class ApplicationEngine:
             main_window = self.driver.current_window_handle
             
             for job in jobs:
+                if self.pause_check: self.pause_check()
                 job_id = job['id']; link = job.get('Apply_Link', '')
                 self.log(f"[{job_id}] {job.get('Title','Job')[:50]}")
                 

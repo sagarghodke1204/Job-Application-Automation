@@ -29,6 +29,50 @@ def sanitize_text_for_csv(s: str) -> str:
     out = out.replace(",", ";") 
     return out.strip()
 
+EXCLUDED_KEYWORDS = [
+    "tele caller",
+    "voice process",
+    "inside sales executive",
+    "billing assistant and cashier",
+    "international non voice process - up to 38k ctc",
+    "walk-in drive freshers - mba-hr - 25/26 passout",
+    "bpo team lead - immediate",
+    "we're hiring customer associate us healthcare process (voice/chat)",
+    "csr - international voice - bangalore /pune /mumbai - night shifts !!!",
+    "human resource executive intern",
+    "customer support executive officer",
+    "area sales executive",
+    "hr executive",
+    "bpo team lead / telesales executive",
+    "customer care executive",
+    "sales",
+    "sales officer",
+    "sales executive",
+    "service executive",
+    "digital  marketing",
+    "international voice"
+]
+
+def is_excluded_role(title: str) -> bool:
+    if not title: return False
+    title_lower = " ".join(title.lower().split())
+    
+    # 1. First check if it matches the excluded roles EXACTLY
+    for kw in EXCLUDED_KEYWORDS:
+        kw_clean = " ".join(kw.lower().split())
+        if title_lower == kw_clean:
+            return True
+            
+    # 2. After that, check if any excluded keyword is present inside the title
+    for kw in EXCLUDED_KEYWORDS:
+        kw_clean = " ".join(kw.lower().split())
+        # Use regex word boundaries that work with non-alphanumeric edges
+        pattern = r'(?<![a-z0-9])' + re.escape(kw_clean) + r'(?![a-z0-9])'
+        if re.search(pattern, title_lower):
+            return True
+            
+    return False
+
 def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
@@ -129,7 +173,8 @@ def resolve_experience(user_exp: dict, jd_exp: dict) -> dict:
 # ---------------------------
 
 class ScraperEngine:
-    def __init__(self, log_callback=None):
+    def __init__(self, log_callback=None, pause_check=None):
+        self.pause_check = pause_check
         self.driver = None
         self.log_callback = log_callback if log_callback else print
         self.processed_signatures = set()
@@ -292,6 +337,7 @@ class ScraperEngine:
 
                 # 2. Pagination
                 for page_num in range(1, 11): 
+                    if self.pause_check: self.pause_check()
                     self.log(f"  [Page {page_num}] scanning...")
                     try: cards = self.driver.find_elements(By.CLASS_NAME, "srp-jobtuple-wrapper")
                     except: cards = []
@@ -300,6 +346,7 @@ class ScraperEngine:
                     fresh_count = 0; consecutive_old = 0
                     
                     for card in cards:
+                        if self.pause_check: self.pause_check()
                         try:
                             date_text = card.find_element(By.CSS_SELECTOR, ".job-post-day").text
                             
@@ -317,6 +364,13 @@ class ScraperEngine:
                             company = card.find_element(By.CSS_SELECTOR, "a.comp-name").text.strip()
 
                             if not raw_link or raw_link in self.processed_links: continue
+
+                            # Skip if job title matches any excluded roles/keywords
+                            if is_excluded_role(job_title):
+                                self.log(f"    [FILTERED] Excluded role matched: {job_title[:40]}...")
+                                self.processed_links.add(raw_link)
+                                continue
+                            
                             
                             self.log(f"    -> Found: {job_title[:40]}... ({date_text})")
                             full_desc = self.get_full_description(raw_link)

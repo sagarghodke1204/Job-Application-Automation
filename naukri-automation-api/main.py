@@ -234,6 +234,39 @@ async def get_profile(current_user: str = Depends(get_current_user)):
 
 # --- GLOBAL STATE ---
 active_tasks: Dict[str, str] = {}
+pause_events: Dict[str, threading.Event] = {}
+stop_events: Dict[str, threading.Event] = {}
+
+def get_stop_event(username: str) -> threading.Event:
+    if username not in stop_events:
+        stop_events[username] = threading.Event()
+    return stop_events[username]
+
+def get_pause_event(username: str) -> threading.Event:
+    if username not in pause_events:
+        event = threading.Event()
+        event.set() # Set means NOT PAUSED (running)
+        pause_events[username] = event
+    return pause_events[username]
+
+def check_pause(username: str, log_cb=None):
+    stop_event = get_stop_event(username)
+    if stop_event.is_set():
+        raise Exception("USER_STOPPED")
+        
+    event = get_pause_event(username)
+    was_paused = False
+    while not event.is_set():
+        if stop_event.is_set():
+            raise Exception("USER_STOPPED")
+        if not was_paused:
+            if log_cb: log_cb({"type": "log", "message": "[SYSTEM] Task Paused. Waiting for resume..."})
+            was_paused = True
+        import time
+        time.sleep(1)
+    if was_paused and log_cb:
+        log_cb({"type": "log", "message": "[SYSTEM] Task Resumed."})
+
 
 # --- AUTOMATION TASKS ---
 
@@ -242,6 +275,8 @@ def run_scrape_task(request_data: ScrapeRequest, loop):
     timestamp = datetime.now().strftime('%H:%M:%S')
     log_cb = make_log_callback(loop, username)
     
+    get_stop_event(username).clear()
+    get_pause_event(username).set()
     active_tasks[username] = "Queued for Scraping"
     log_cb(f"[{timestamp}] Scrape Request queued for {username}...")
     
@@ -249,7 +284,7 @@ def run_scrape_task(request_data: ScrapeRequest, loop):
         with server_semaphore:
             active_tasks[username] = "Scraping in Progress"
             log_cb(f"[{datetime.now().strftime('%H:%M:%S')}] >>> SLOT ACQUIRED for Scrape")
-            local_scraper = ScraperEngine(log_callback=log_cb) 
+            local_scraper = ScraperEngine(log_callback=log_cb, pause_check=lambda: check_pause(username, log_cb)) 
             try:
                 parsed_user_exp = parse_user_experience_input(request_data.user_exp_raw)
                 common_ans = request_data.common_answers.model_dump() if request_data.include_common_answers else None
@@ -277,6 +312,8 @@ def run_apply_task(username: str, password: str, resume_data: Dict, loop):
     log_cb = make_log_callback(loop, username)
     timestamp = datetime.now().strftime('%H:%M:%S')
     
+    get_stop_event(username).clear()
+    get_pause_event(username).set()
     active_tasks[username] = "Queued for Application"
     log_cb(f"[{timestamp}] Apply Request queued for {username}...")
     
@@ -285,7 +322,7 @@ def run_apply_task(username: str, password: str, resume_data: Dict, loop):
             active_tasks[username] = "Application in Progress"
             log_cb(f"[{datetime.now().strftime('%H:%M:%S')}] >>> SLOT ACQUIRED for Apply")
             try:
-                app_engine = ApplicationEngine(log_callback=log_cb)
+                app_engine = ApplicationEngine(log_callback=log_cb, pause_check=lambda: check_pause(username, log_cb))
                 app_engine.run_application_job(username, password, resume_data, username)
             except Exception as e: log_cb(f"CRITICAL APPLY ERROR: {e}")
             finally: 
@@ -358,7 +395,28 @@ async def run_full_automation(request: ScrapeRequest, background_tasks: Backgrou
 @app.get("/task_status/{username}")
 async def get_task_status(username: str):
     status_msg = active_tasks.get(username, "Idle")
-    return {"username": username, "status": status_msg, "is_running": status_msg != "Idle"}
+    is_paused = False
+    if username in pause_events and not pause_events[username].is_set():
+        is_paused = True
+    return {"username": username, "status": status_msg, "is_running": status_msg != "Idle", "is_paused": is_paused}
+
+@app.post("/pause_task/{username}")
+async def pause_task(username: str):
+    get_pause_event(username).clear()
+    return {"status": "paused"}
+
+@app.post("/resume_task/{username}")
+async def resume_task(username: str):
+    get_pause_event(username).set()
+    return {"status": "resumed"}
+
+@app.post("/stop_task/{username}")
+async def stop_task(username: str):
+    get_stop_event(username).set()
+    # Also resume the pause event so the thread isn't stuck waiting to be resumed before dying
+    get_pause_event(username).set()
+    return {"status": "stopped"}
+
 
 @app.get("/dashboard_stats/{email}")
 async def dashboard_stats(email: str, days: int = 7):
