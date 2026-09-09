@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { Link } from 'react-router-dom';
 import {
     BarChart,
     Bar,
@@ -13,7 +14,10 @@ import {
     Pie,
     Cell
 } from 'recharts';
-import { Briefcase, Building2, UserCheck, MousePointerClick, TrendingUp, PieChart as PieIcon, User, ExternalLink } from 'lucide-react';
+import { 
+    Building2, UserCheck, MousePointerClick, TrendingUp, 
+    PieChart as PieIcon, User, Layers, ArrowRight
+} from 'lucide-react';
 import { API_URL } from './config';
 
 const DashboardPage = () => {
@@ -26,8 +30,6 @@ const DashboardPage = () => {
         companySite: 0,
         walkIn: 0
     });
-    const [externalJobs, setExternalJobs] = useState([]);
-    const [walkinJobs, setWalkinJobs] = useState([]);
 
     // Colors
     const COLORS = {
@@ -39,40 +41,35 @@ const DashboardPage = () => {
     const PIE_COLORS = [COLORS.naukriDirect, COLORS.companySite, COLORS.walkIn];
 
     useEffect(() => {
-        // Load username and email from local storage (set during login)
         const appUsername = localStorage.getItem('username');
         const appEmail = localStorage.getItem('email');
 
-        if (appUsername) {
-            setUsername(appUsername);
-        }
-        if (appEmail) {
-            setEmail(appEmail);
-        }
+        if (appUsername) setUsername(appUsername);
+        if (appEmail) setEmail(appEmail);
     }, []);
 
     useEffect(() => {
         const fetchStats = async () => {
             if (!email) return;
+            const token = localStorage.getItem('token');
+            if (!token) return;
 
             try {
-                // Use email for fetching data as per database schema
-                const response = await axios.get(`${API_URL}/dashboard_stats/${email}`);
+                const response = await axios.get(`${API_URL}/dashboard_stats/${email}`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
 
                 if (!response.data || !response.data.stats) return;
 
                 const { overview, distribution, daily_breakdown } = response.data.stats;
 
-                // Process daily_breakdown for chart
                 const chartDataMap = {};
 
-                // Helper to format date as YYYY-MM-DD
                 const formatDate = (dateStr) => {
                     const d = new Date(dateStr);
                     return d.toISOString().split('T')[0];
                 };
 
-                // Initialize map with data from daily_breakdown
                 (daily_breakdown || []).forEach(item => {
                     const date = formatDate(item.date);
                     if (!chartDataMap[date]) {
@@ -92,10 +89,8 @@ const DashboardPage = () => {
                     chartDataMap[date].total += count;
                 });
 
-                // Convert map to array and sort by date
                 const chartData = Object.values(chartDataMap).sort((a, b) => new Date(a.date) - new Date(b.date));
 
-                // Map application_notes to categories for stats
                 let naukriCount = 0;
                 let companyCount = 0;
                 let walkInCount = 0;
@@ -109,7 +104,6 @@ const DashboardPage = () => {
                     } else if (note.includes("company") || note.includes("external")) {
                         companyCount += count;
                     } else {
-                        // Default to Naukri Direct (AI Chatbot, Direct Apply, etc.)
                         naukriCount += count;
                     }
                 });
@@ -127,33 +121,7 @@ const DashboardPage = () => {
             }
         };
 
-        const fetchExternalJobs = async () => {
-            if (!email) return;
-            try {
-                const response = await axios.get(`${API_URL}/external_jobs/${email}`);
-                if (response.data && response.data.jobs) {
-                    setExternalJobs(response.data.jobs);
-                }
-            } catch (error) {
-                console.error("Failed to fetch external jobs:", error);
-            }
-        };
-
-        const fetchWalkinJobs = async () => {
-            if (!email) return;
-            try {
-                const response = await axios.get(`${API_URL}/walkin_jobs/${email}`);
-                if (response.data && response.data.jobs) {
-                    setWalkinJobs(response.data.jobs);
-                }
-            } catch (error) {
-                console.error("Failed to fetch walkin jobs:", error);
-            }
-        };
-
         fetchStats();
-        fetchExternalJobs();
-        fetchWalkinJobs();
     }, [email]);
 
     const pieData = [
@@ -163,47 +131,47 @@ const DashboardPage = () => {
     ];
 
     return (
-        <div className="min-h-screen bg-gray-50 p-6 md:p-8 font-sans">
-            <div className="max-w-7xl mx-auto space-y-8">
+        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 md:p-8 font-sans">
+            <div className="max-w-7xl mx-auto space-y-6 md:space-y-8">
 
                 {/* Header */}
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                        <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">
+                        <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
                             Application Overview
                         </h1>
-                        <p className="text-gray-500 mt-1">
+                        <p className="text-xs sm:text-sm text-gray-500 mt-1">
                             Tracking your job search performance over the last 7 days.
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center justify-between sm:justify-end gap-3">
                         {/* User Profile Badge */}
-                        <div className="flex items-center gap-3 bg-white pl-2 pr-4 py-1.5 rounded-full shadow-sm border border-gray-200 transition-all hover:shadow-md">
-                            <div className="p-2 bg-blue-50 rounded-full text-blue-600">
+                        <div className="hidden sm:flex items-center gap-2.5 bg-white pl-2 pr-4 py-1.5 rounded-full shadow-xs border border-gray-200">
+                            <div className="p-1.5 bg-blue-50 rounded-full text-blue-600">
                                 <User className="w-4 h-4" />
                             </div>
                             <div className="flex flex-col">
-                                <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Logged in as</span>
-                                <span className="text-sm font-bold text-gray-700 leading-tight">{username}</span>
+                                <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">Logged in as</span>
+                                <span className="text-xs font-bold text-gray-700 leading-tight">{username}</span>
                             </div>
                         </div>
 
                         {/* Total Count Badge */}
-                        <div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-200 text-sm font-medium text-gray-600 flex flex-col items-end">
-                            <span className="text-xs text-gray-400 uppercase tracking-wider">Total Applications</span>
-                            <span className="text-blue-600 font-black text-2xl leading-none">{stats.total}</span>
+                        <div className="bg-white px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl shadow-xs border border-gray-200 text-sm font-medium text-gray-600 flex items-center gap-3 sm:flex-col sm:items-end">
+                            <span className="text-xs text-gray-400 uppercase tracking-wider">Total Applied</span>
+                            <span className="text-blue-600 font-black text-xl sm:text-2xl leading-none">{stats.total}</span>
                         </div>
                     </div>
                 </div>
 
                 {/* Stats Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
                     <StatCard
                         title="Naukri Direct"
                         value={stats.naukriDirect}
                         subtitle="Applied on Platform"
-                        icon={<MousePointerClick className="w-6 h-6 text-white" />}
+                        icon={<MousePointerClick className="w-5 h-5 sm:w-6 sm:h-6 text-white" />}
                         color="bg-blue-500"
                         trend="+12%"
                     />
@@ -211,7 +179,7 @@ const DashboardPage = () => {
                         title="Company Site"
                         value={stats.companySite}
                         subtitle="External Applications"
-                        icon={<Building2 className="w-6 h-6 text-white" />}
+                        icon={<Building2 className="w-5 h-5 sm:w-6 sm:h-6 text-white" />}
                         color="bg-amber-500"
                         trend="+5%"
                     />
@@ -219,46 +187,66 @@ const DashboardPage = () => {
                         title="Walk-in Drives"
                         value={stats.walkIn}
                         subtitle="Offline / Direct"
-                        icon={<UserCheck className="w-6 h-6 text-white" />}
+                        icon={<UserCheck className="w-5 h-5 sm:w-6 sm:h-6 text-white" />}
                         color="bg-emerald-500"
                         trend="Stable"
                     />
                 </div>
 
-                {/* Charts Section */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Tracking Shortcut Banner */}
+                <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-5 sm:p-6 shadow-sm text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5">
+                        <div className="p-2.5 sm:p-3 bg-white/10 rounded-xl backdrop-blur-xs flex-shrink-0">
+                            <Layers className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
+                        </div>
+                        <div>
+                            <h3 className="text-base sm:text-lg font-bold">Scraped Jobs & Live Pipeline</h3>
+                            <p className="text-blue-100 text-xs sm:text-sm mt-0.5">Filter by AI match score & track status in real-time.</p>
+                        </div>
+                    </div>
+                    <Link
+                        to="/tracking"
+                        className="w-full sm:w-auto text-center inline-flex items-center justify-center gap-2 bg-white text-blue-600 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-xs hover:bg-blue-50 transition-all active:scale-[0.98] whitespace-nowrap"
+                    >
+                        Open Job Tracking
+                        <ArrowRight className="w-4 h-4" />
+                    </Link>
+                </div>
 
-                    {/* Main Trend Chart (Takes up 2 columns) */}
-                    <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                        <div className="flex items-center justify-between mb-6">
-                            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                {/* Charts Section */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
+
+                    {/* Main Trend Chart */}
+                    <div className="lg:col-span-2 bg-white rounded-2xl shadow-xs border border-gray-100 p-4 sm:p-6">
+                        <div className="flex items-center justify-between mb-5">
+                            <h2 className="text-lg sm:text-xl font-bold text-gray-800 flex items-center gap-2">
                                 <TrendingUp className="w-5 h-5 text-gray-500" />
                                 Daily Application Trends
                             </h2>
                         </div>
 
-                        <div className="h-[350px] w-full">
+                        <div className="h-[260px] sm:h-[320px] w-full">
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart
                                     data={data}
-                                    margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
-                                    barSize={32}
+                                    margin={{ top: 10, right: 10, left: -25, bottom: 0 }}
+                                    barSize={24}
                                 >
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                                     <XAxis
                                         dataKey="date"
                                         axisLine={false}
                                         tickLine={false}
-                                        tick={{ fill: '#6B7280', fontSize: 12 }}
+                                        tick={{ fill: '#6B7280', fontSize: 10 }}
                                         dy={10}
                                     />
                                     <YAxis
                                         axisLine={false}
                                         tickLine={false}
-                                        tick={{ fill: '#6B7280', fontSize: 12 }}
+                                        tick={{ fill: '#6B7280', fontSize: 10 }}
                                     />
                                     <Tooltip content={<CustomTooltip />} cursor={{ fill: '#F3F4F6' }} />
-                                    <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
+                                    <Legend iconType="circle" wrapperStyle={{ paddingTop: '15px', fontSize: '12px' }} />
 
                                     <Bar dataKey="Naukri Direct" stackId="a" fill={COLORS.naukriDirect} radius={[0, 0, 4, 4]} />
                                     <Bar dataKey="Company Site" stackId="a" fill={COLORS.companySite} />
@@ -268,22 +256,22 @@ const DashboardPage = () => {
                         </div>
                     </div>
 
-                    {/* Distribution Chart (Takes up 1 column) */}
-                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col">
-                        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mb-6">
+                    {/* Distribution Chart */}
+                    <div className="bg-white rounded-2xl shadow-xs border border-gray-100 p-4 sm:p-6 flex flex-col">
+                        <h2 className="text-lg sm:text-xl font-bold text-gray-800 flex items-center gap-2 mb-4">
                             <PieIcon className="w-5 h-5 text-gray-500" />
                             Distribution
                         </h2>
 
-                        <div className="flex-1 min-h-[300px] relative">
+                        <div className="flex-1 min-h-[260px] relative">
                             <ResponsiveContainer width="100%" height="100%">
                                 <PieChart>
                                     <Pie
                                         data={pieData}
                                         cx="50%"
                                         cy="50%"
-                                        innerRadius={60}
-                                        outerRadius={100}
+                                        innerRadius={50}
+                                        outerRadius={85}
                                         paddingAngle={5}
                                         dataKey="value"
                                     >
@@ -292,131 +280,40 @@ const DashboardPage = () => {
                                         ))}
                                     </Pie>
                                     <Tooltip />
-                                    <Legend verticalAlign="bottom" height={36} />
+                                    <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: '12px' }} />
                                 </PieChart>
                             </ResponsiveContainer>
 
-                            {/* Center Text Overlay */}
                             <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none pb-8">
-                                <span className="block text-3xl font-bold text-gray-800">{stats.total}</span>
-                                <span className="text-xs text-gray-500 uppercase tracking-wide">Total</span>
+                                <span className="block text-2xl font-bold text-gray-800">{stats.total}</span>
+                                <span className="text-[10px] text-gray-500 uppercase tracking-wide">Total</span>
                             </div>
                         </div>
                     </div>
 
                 </div>
-
-                {/* External Applications List */}
-                {externalJobs.length > 0 && (
-                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mt-8">
-                        <div className="flex items-center justify-between mb-6">
-                            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                                <ExternalLink className="w-5 h-5 text-gray-500" />
-                                External Applications (Action Required)
-                            </h2>
-                            <span className="bg-amber-100 text-amber-700 text-xs font-bold px-3 py-1 rounded-full">
-                                {externalJobs.length} Links
-                            </span>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left border-collapse">
-                                <thead>
-                                    <tr className="border-b border-gray-200 text-sm font-semibold text-gray-500 uppercase tracking-wider">
-                                        <th className="py-3 px-4">Job Title</th>
-                                        <th className="py-3 px-4">Company</th>
-                                        <th className="py-3 px-4 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                    {externalJobs.map((job) => (
-                                        <tr key={job.id} className="hover:bg-gray-50 transition-colors">
-                                            <td className="py-4 px-4 font-medium text-gray-900">{job.Title}</td>
-                                            <td className="py-4 px-4 text-gray-600">{job.Company}</td>
-                                            <td className="py-4 px-4 text-right">
-                                                <a 
-                                                    href={job.Apply_Link} 
-                                                    target="_blank" 
-                                                    rel="noopener noreferrer"
-                                                    className="inline-flex items-center gap-1 text-sm font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition-colors"
-                                                >
-                                                    Apply Here
-                                                    <ExternalLink className="w-4 h-4" />
-                                                </a>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                )}
-
-                {/* Walk-in Drives List */}
-                {walkinJobs.length > 0 && (
-                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mt-8">
-                        <div className="flex items-center justify-between mb-6">
-                            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                                <UserCheck className="w-5 h-5 text-gray-500" />
-                                Walk-in Drives (Direct Action)
-                            </h2>
-                            <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-3 py-1 rounded-full">
-                                {walkinJobs.length} Drives
-                            </span>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left border-collapse">
-                                <thead>
-                                    <tr className="border-b border-gray-200 text-sm font-semibold text-gray-500 uppercase tracking-wider">
-                                        <th className="py-3 px-4">Job Title</th>
-                                        <th className="py-3 px-4">Company</th>
-                                        <th className="py-3 px-4 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                    {walkinJobs.map((job) => (
-                                        <tr key={job.id} className="hover:bg-gray-50 transition-colors">
-                                            <td className="py-4 px-4 font-medium text-gray-900">{job.Title}</td>
-                                            <td className="py-4 px-4 text-gray-600">{job.Company}</td>
-                                            <td className="py-4 px-4 text-right">
-                                                <a 
-                                                    href={job.Apply_Link} 
-                                                    target="_blank" 
-                                                    rel="noopener noreferrer"
-                                                    className="inline-flex items-center gap-1 text-sm font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition-colors"
-                                                >
-                                                    View Details
-                                                    <ExternalLink className="w-4 h-4" />
-                                                </a>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                )}
             </div>
         </div>
     );
 };
 
 const StatCard = ({ title, value, subtitle, icon, color, trend }) => (
-    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition-shadow duration-200">
+    <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-xs border border-gray-100 hover:shadow-md transition-all duration-200">
         <div className="flex items-start justify-between">
             <div>
-                <p className="text-sm font-medium text-gray-500">{title}</p>
-                <h3 className="text-3xl font-bold text-gray-900 mt-2">{value}</h3>
-                <p className="text-xs text-gray-400 mt-1">{subtitle}</p>
+                <p className="text-xs sm:text-sm font-medium text-gray-500">{title}</p>
+                <h3 className="text-2xl sm:text-3xl font-bold text-gray-900 mt-1">{value}</h3>
+                <p className="text-[11px] text-gray-400 mt-0.5">{subtitle}</p>
             </div>
-            <div className={`p-3 rounded-xl ${color} shadow-lg shadow-opacity-20`}>
+            <div className={`p-2.5 sm:p-3 rounded-xl ${color} shadow-xs`}>
                 {icon}
             </div>
         </div>
-        <div className="mt-4 flex items-center text-sm">
-            <span className="text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-full">
+        <div className="mt-3 flex items-center text-xs">
+            <span className="text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded-full text-[11px]">
                 {trend}
             </span>
-            <span className="text-gray-400 ml-2">vs last week</span>
+            <span className="text-gray-400 ml-2 text-[11px]">vs last week</span>
         </div>
     </div>
 );
@@ -424,12 +321,12 @@ const StatCard = ({ title, value, subtitle, icon, color, trend }) => (
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
         return (
-            <div className="bg-gray-900 text-white p-3 rounded-lg shadow-xl text-sm">
-                <p className="font-semibold mb-2 border-b border-gray-700 pb-1">{label}</p>
+            <div className="bg-gray-900 text-white p-3 rounded-lg shadow-xl text-xs">
+                <p className="font-semibold mb-1.5 border-b border-gray-700 pb-1">{label}</p>
                 <div className="space-y-1">
                     {payload.map((entry, index) => (
-                        <div key={index} className="flex items-center justify-between gap-4">
-                            <div className="flex items-center gap-2">
+                        <div key={index} className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-1.5">
                                 <span
                                     className="w-2 h-2 rounded-full"
                                     style={{ backgroundColor: entry.color }}
@@ -439,7 +336,7 @@ const CustomTooltip = ({ active, payload, label }) => {
                             <span className="font-bold">{entry.value}</span>
                         </div>
                     ))}
-                    <div className="pt-2 mt-2 border-t border-gray-700 flex justify-between font-bold text-gray-100">
+                    <div className="pt-1.5 mt-1.5 border-t border-gray-700 flex justify-between font-bold text-gray-100">
                         <span>Total</span>
                         <span>{payload.reduce((acc, curr) => acc + curr.value, 0)}</span>
                     </div>

@@ -150,6 +150,11 @@ const ActionButton = ({ onClick, disabled, loading, icon: Icon, label, colorClas
 
 // --- Main Component ---
 const NaukriScraperPage = () => {
+    // Track whether localStorage had saved data (used to decide if server restore is needed)
+    const hadLocalData = (() => {
+        try { return !!localStorage.getItem('naukriFormData'); } catch { return false; }
+    })();
+
     // Initialize state from localStorage or default with robust merge
     const [formData, setFormData] = useState(() => {
         try {
@@ -160,6 +165,8 @@ const NaukriScraperPage = () => {
             return initialFormData;
         }
     });
+
+    const [profileRestored, setProfileRestored] = useState(false);
 
     const [jobStats, setJobStats] = useState({ scraped: 0, applied: 0 });
 
@@ -188,11 +195,63 @@ const NaukriScraperPage = () => {
         localStorage.setItem('naukriFormData', JSON.stringify(formData));
     }, [formData]);
 
+    // On mount: if no local data (new device / incognito), restore from server profile
+    useEffect(() => {
+        if (hadLocalData) return; // Already have local data — skip server restore
+
+        const token = localStorage.getItem('token');
+        if (!token) return;
+
+        const restoreFromServer = async () => {
+            try {
+                const res = await axios.get(`${BACKEND_URL}/user/profile`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (!res.data?.has_data) return;
+
+                const sc = res.data.scrape_config || {};
+                const rd = res.data.resume_data || {};
+
+                setFormData(prev => ({
+                    ...prev,
+                    // Credentials
+                    username: prev.username === initialFormData.username ? (res.data.username || prev.username) : prev.username,
+                    password: res.data.naukri_password || prev.password,
+                    // Search params
+                    location:               sc.location        || prev.location,
+                    experience:             sc.experience       ?? prev.experience,
+                    roles:                  Array.isArray(sc.roles) ? sc.roles.join(', ') : (sc.roles || prev.roles),
+                    techKeywords:           Array.isArray(sc.tech_keywords) ? sc.tech_keywords.join(', ') : (sc.tech_keywords || prev.techKeywords),
+                    applyTechFilter:        sc.apply_tech_filter ?? prev.applyTechFilter,
+                    minScore:               sc.min_score        ?? prev.minScore,
+                    userExperience:         sc.user_exp_raw     || prev.userExperience,
+                    // Resume / common answers
+                    postalCode:             rd.POSTAL_CODE      || prev.postalCode,
+                    totalExpYears:          rd.TOTAL_EXP_YEARS  || prev.totalExpYears,
+                    linkedinUrl:            rd.LINKEDIN         || prev.linkedinUrl,
+                    noticePeriod:           rd.NOTICE_PERIOD    || prev.noticePeriod,
+                    currentCtc:             rd.CURRENT_CTC  ? parseFloat(rd.CURRENT_CTC) / 100000  : prev.currentCtc,
+                    expectedCtc:            rd.EXPECTED_CTC ? parseFloat(rd.EXPECTED_CTC) / 100000 : prev.expectedCtc,
+                }));
+                setProfileRestored(true);
+            } catch (err) {
+                console.error('Could not restore profile from server:', err);
+            }
+        };
+
+        restoreFromServer();
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const getAuthHeaders = () => {
+        const token = localStorage.getItem('token');
+        return token ? { Authorization: `Bearer ${token}` } : {};
+    };
+
     const togglePause = async () => {
         if (!formData.username) return;
         const endpoint = isPaused ? `/resume_task/${formData.username}` : `/pause_task/${formData.username}`;
         try {
-            await axios.post(BACKEND_URL + endpoint);
+            await axios.post(BACKEND_URL + endpoint, {}, { headers: getAuthHeaders() });
             setIsPaused(!isPaused);
             logMessage(`Task ${isPaused ? 'Resumed' : 'Paused'} by user.`);
         } catch (error) {
@@ -203,7 +262,7 @@ const NaukriScraperPage = () => {
     const stopTask = async () => {
         if (!formData.username) return;
         try {
-            await axios.post(`${BACKEND_URL}/stop_task/${formData.username}`);
+            await axios.post(`${BACKEND_URL}/stop_task/${formData.username}`, {}, { headers: getAuthHeaders() });
             setLoading(false);
             setIsPaused(false);
             setAutoApplyCountdown(null);
@@ -238,9 +297,14 @@ const NaukriScraperPage = () => {
     }, [log]);
 
     const fetchStats = async () => {
-        if (!formData.username) return;
+        // Use website login email (from JWT), NOT Naukri email
+        const siteEmail = localStorage.getItem('email');
+        const token = localStorage.getItem('token');
+        if (!siteEmail || !token) return;
         try {
-            const response = await axios.get(`${BACKEND_URL}/dashboard_stats/${formData.username}`);
+            const response = await axios.get(`${BACKEND_URL}/dashboard_stats/${siteEmail}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
             if (response.data?.stats?.overview) {
                 setJobStats({
                     scraped: response.data.stats.overview.total_scraped || 0,
@@ -253,26 +317,22 @@ const NaukriScraperPage = () => {
     };
 
     const checkTaskStatus = async () => {
-        if (!formData.username) return;
+        const siteEmail = localStorage.getItem('email');
+        const token = localStorage.getItem('token');
+        if (!siteEmail || !token) return;
         try {
-            const response = await axios.get(`${BACKEND_URL}/task_status/${formData.username}`);
+            const response = await axios.get(`${BACKEND_URL}/task_status/${siteEmail}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
             if (response.data?.is_running) {
-                // Only update if we are not already in a specific loading state (start-up)
-                // or if we want to reflect the exact backend status.
-                // For now, we keep it simple: if running, ensure we are truthy.
-                // If we want to preserve the specific button spinner, we might check if 'loading' is already set.
-                // But generally, keeping it sync with backend is safer for "stuck" states.
                 if (loading === false) {
                     setLoading(response.data.status);
                 }
                 setIsPaused(response.data.is_paused);
-
-                // Only add resumption log if it's not the very last message already
                 setLog(prev => {
                     if (prev.length > 0 && typeof prev[0] === 'string' && prev[0].includes("Resuming")) return prev;
                     if (prev.length > 0 && typeof prev[0] === 'string' && prev[0].includes(response.data.status)) return prev;
-                    return prev; // Don't spam logs on polling
-                    // return [`[System] Resuming session: ${response.data.status}...`, ...prev].slice(0, 100);
+                    return prev;
                 });
             } else {
                 setLoading(false);
@@ -440,7 +500,7 @@ const NaukriScraperPage = () => {
         const payload = buildPayload();
 
         try {
-            const response = await axios.post(BACKEND_URL + endpoint, payload);
+            const response = await axios.post(BACKEND_URL + endpoint, payload, { headers: getAuthHeaders() });
             if (response.status === 200) {
                 const result = response.data;
                 setApiMessage({ type: 'success', text: result.status || `${buttonLabel} initiated successfully!` });
@@ -461,21 +521,31 @@ const NaukriScraperPage = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 p-6 md:p-12 font-sans text-gray-900">
-            <div className="max-w-6xl mx-auto space-y-8">
+        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 md:p-8 font-sans text-gray-900">
+            <div className="max-w-6xl mx-auto space-y-6 md:space-y-8">
 
                 {/* Header */}
-                <header className="text-center space-y-4 mb-12">
-                    <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-xl shadow-blue-100 mb-4">
-                        <Layers className="w-10 h-10 text-blue-600" />
+                <header className="text-center space-y-3 sm:space-y-4 mb-8 md:mb-12">
+                    <div className="inline-flex items-center justify-center p-2.5 sm:p-3 bg-white rounded-2xl shadow-xl shadow-blue-100 mb-2 sm:mb-4">
+                        <Layers className="w-8 h-8 sm:w-10 sm:h-10 text-blue-600" />
                     </div>
-                    <h1 className="text-4xl md:text-5xl font-black tracking-tight text-gray-900">
+                    <h1 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight text-gray-900">
                         Job<span className="text-blue-600">Agent</span> Configuration
                     </h1>
-                    <p className="text-lg text-gray-500 max-w-2xl mx-auto">
+                    <p className="text-xs sm:text-base text-gray-500 max-w-2xl mx-auto">
                         Configure your autonomous agent to scrape, filter, and apply to jobs on Naukri.com with precision.
                     </p>
                 </header>
+
+                {/* Profile Restored Banner */}
+                {profileRestored && (
+                    <div className="p-4 rounded-xl flex items-center gap-3 shadow-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <div className="p-2 rounded-full bg-emerald-100">
+                            <RefreshCw className="w-5 h-5" />
+                        </div>
+                        <span className="font-medium">✅ Your saved profile has been restored from the server. All fields are pre-filled.</span>
+                    </div>
+                )}
 
                 {/* API Message Alert */}
                 {apiMessage.text && (

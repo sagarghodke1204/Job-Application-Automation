@@ -18,7 +18,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import SessionNotCreatedException
 from webdriver_manager.chrome import ChromeDriverManager
-from chrome_utils import get_driver_path, get_chrome_major_version
+from chrome_utils import get_driver_path, get_chrome_major_version, create_stealth_driver, kill_zombie_chromedriver_processes
 
 # ---------------------------
 # Helper utilities
@@ -76,11 +76,17 @@ def is_excluded_role(title: str) -> bool:
 def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
-def compute_tech_score(text: str, tech_keywords: list) -> float:
-    if not tech_keywords: return 0.0
+def compute_tech_score(text: str, tech_keywords: list, fallback_roles: list = None) -> float:
     txt = (text or "").lower()
+    cleaned_keywords = [k.strip().lower() for k in (tech_keywords or []) if k.strip()]
+    if not cleaned_keywords and fallback_roles:
+        for r in fallback_roles:
+            for part in re.split(r"[,/\s]+", r):
+                p = part.strip().lower()
+                if len(p) >= 3 and p not in cleaned_keywords:
+                    cleaned_keywords.append(p)
+    if not cleaned_keywords: return 0.0
     matches = set()
-    cleaned_keywords = [k.strip().lower() for k in tech_keywords if k.strip()]
     for k in cleaned_keywords:
         if k in txt: matches.add(k)
     denom = len(cleaned_keywords) if cleaned_keywords else 1
@@ -172,6 +178,9 @@ def resolve_experience(user_exp: dict, jd_exp: dict) -> dict:
 # Scraper Engine (Stealth + Full Logic)
 # ---------------------------
 
+# --- MEMORY OPTIMIZATION SWITCH (Set to False to Undo) ---
+ENABLE_LOW_MEMORY_MODE = True
+
 class ScraperEngine:
     def __init__(self, log_callback=None, pause_check=None):
         self.pause_check = pause_check
@@ -203,31 +212,27 @@ class ScraperEngine:
         options.add_argument("--disable-popup-blocking")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        
+        # Enhanced Memory & Process Optimization Flags
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-infobars")
-        options.add_argument("--blink-settings=imagesEnabled=false")
+        options.add_argument("--disable-gpu-shader-disk-cache")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--mute-audio")
+        options.add_argument("--log-level=3")
+        options.add_argument("--disk-cache-size=1")
+        options.add_argument("--media-cache-size=1")
+        
+        if ENABLE_LOW_MEMORY_MODE:
+            options.add_argument("--blink-settings=imagesEnabled=false")
+            options.add_argument("--renderer-process-limit=2")
+            self.log("Scraper Low Memory Mode ENABLED.")
         
         try:
-            self.log("[DEBUG] Fetching driver path...")
-            driver_path = get_driver_path()
-            self.log(f"[DEBUG] Driver path fetched: {driver_path}")
-            
-            self.log("[DEBUG] Fetching major version...")
-            major_version = get_chrome_major_version()
-            self.log(f"[DEBUG] Major version fetched: {major_version}")
-            
-            # Use 'headless=new' instead of 'True' if needed, but let's stick to True 
-            # and add more debugs before we suspect it.
-            if major_version:
-                self.log(f"Passing version_main={major_version} to undetected_chromedriver")
-                self.log("[DEBUG] Calling uc.Chrome with major_version...")
-                self.driver = uc.Chrome(options=options, headless=True, use_subprocess=True, driver_executable_path=driver_path, version_main=major_version)
-            else:
-                self.log("[DEBUG] Calling uc.Chrome without major_version...")
-                self.driver = uc.Chrome(options=options, headless=True, use_subprocess=True, driver_executable_path=driver_path)
+            self.driver = create_stealth_driver(options=options, headless=True, max_retries=3, log_fn=self.log)
             self.log("Browser Ready.")
         except SessionNotCreatedException as e:
             self.log(f"[CRITICAL] SessionNotCreatedException: {e}")
@@ -276,7 +281,7 @@ class ScraperEngine:
         return jd
 
     def execute_search(self, roles_list, location, experience, tech_keywords, apply_tech_filter, min_score,
-                       user_experience_dict=None, include_user_experience=False,
+                       apply_min_score=True, user_experience_dict=None, include_user_experience=False,
                        common_answers=None, include_common_answers=False,
                        db_writer=None, username: str = None): 
         
@@ -378,13 +383,15 @@ class ScraperEngine:
                             sanitized_desc = sanitize_text_for_csv(full_desc)
 
                             # --- FULL PARSING LOGIC ---
-                            tech_score = compute_tech_score(full_text, tech_keywords_clean)
+                            tech_score = compute_tech_score(full_text, tech_keywords_clean, fallback_roles=roles_list)
                             jd_extracted = extract_experience_from_jd(full_desc, tech_keywords_clean) if tech_keywords_clean else {}
                             user_exp = parse_user_experience_input(user_experience_dict) if isinstance(user_experience_dict, str) else (user_experience_dict or {})
                             resolved = resolve_experience(user_exp if include_user_experience else {}, jd_extracted)
 
+                            should_filter = bool(apply_tech_filter or apply_min_score or float(min_score) > 0)
                             kept_by_filter = "yes"
-                            if apply_tech_filter and tech_score < float(min_score): kept_by_filter = "no"
+                            if should_filter and tech_score < float(min_score):
+                                kept_by_filter = "no"
                             
                             signature = f"{company}||{job_title}"
                             if signature in self.processed_signatures: continue
@@ -401,22 +408,22 @@ class ScraperEngine:
                             if include_common_answers and common_answers:
                                 entry.update({"Notice_Period": common_answers.get("notice_period"), "Current_CTC": common_answers.get("current_ctc")})
 
+                            all_jobs.append(entry)
+                            self.processed_signatures.add(signature)
+                            self.processed_links.add(raw_link)
+
                             if kept_by_filter == "yes":
-                                all_jobs.append(entry)
-                                self.processed_signatures.add(signature)
-                                self.processed_links.add(raw_link)
                                 fresh_count += 1
-                                
                                 # Emit Progress Event
                                 self.log({
                                     "type": "progress",
                                     "action": "scrape",
-                                    "count": len(all_jobs),
+                                    "count": len([j for j in all_jobs if j.get("kept_by_filter") == "yes"]),
                                     "username": username or "unknown",
-                                    "message": f"Scraped: {job_title[:20]}..."
+                                    "message": f"Scraped & Kept: {job_title[:20]}..."
                                 })
                             else:
-                                self.processed_links.add(raw_link)
+                                self.log(f"    [FILTERED OUT] {job_title[:35]}... ({tech_score}% match < {min_score}% min score)")
                         except: continue
                     
                     self.log(f"  [Page {page_num}] fresh jobs: {fresh_count}")
@@ -434,6 +441,9 @@ class ScraperEngine:
             self.log(f"Attempting to write {len(all_jobs)} jobs for user {username} to the database...")
             db_writer(all_jobs, username) 
         
-        try: self.driver.quit()
+        try:
+            if self.driver:
+                self.driver.quit()
         except: pass
         self.driver = None
+        kill_zombie_chromedriver_processes()

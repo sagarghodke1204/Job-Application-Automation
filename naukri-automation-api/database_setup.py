@@ -299,9 +299,32 @@ def write_jobs_to_db(jobs: List[Dict[str, Any]], username: str):
 
 # --- CRITICAL FIX HERE: MAPPING KEYS ---
 def get_pending_jobs(username: str) -> List[Dict[str, Any]]:
+    # Enforce user's smart filter criteria on pending jobs stored in DB
+    try:
+        user_cfg = get_user_config(username)
+        if user_cfg and user_cfg.get('scrape_config'):
+            sc = user_cfg['scrape_config']
+            apply_tf = sc.get('apply_tech_filter', False)
+            apply_ms = sc.get('apply_min_score', True)
+            min_score = float(sc.get('min_score', 0))
+            if (apply_tf or apply_ms or min_score > 0) and min_score > 0:
+                conn_sync = get_db_connection()
+                c_sync = conn_sync.cursor()
+                c_sync.execute("""
+                    UPDATE scraped_jobs 
+                    SET kept_by_filter = 'no' 
+                    WHERE username = %s 
+                      AND applied_status = 'PENDING' 
+                      AND (tech_match_score < %s OR tech_match_score IS NULL)
+                """, (username, min_score))
+                conn_sync.commit()
+                c_sync.close(); conn_sync.close()
+    except Exception as e:
+        print(f"[Smart Filter Sync Warning] {e}")
+
     conn = get_db_connection()
     c = conn.cursor(cursor_factory=RealDictCursor) 
-    c.execute("SELECT * FROM scraped_jobs WHERE applied_status = 'PENDING' AND kept_by_filter = 'yes' AND username = %s", (username,))
+    c.execute("SELECT * FROM scraped_jobs WHERE applied_status = 'PENDING' AND (kept_by_filter = 'yes' OR kept_by_filter IS NULL) AND username = %s ORDER BY timestamp DESC, id DESC", (username,))
     jobs = c.fetchall()
     c.close(); conn.close()
     
@@ -327,7 +350,8 @@ def get_pending_jobs(username: str) -> List[Dict[str, Any]]:
             "Expected_CTC": row.get('expected_ctc'),
             "LinkedIn": row.get('linkedin'),
             "Face_to_Face": row.get('face_to_face'),
-            "applied_status": row.get('applied_status')
+            "applied_status": row.get('applied_status'),
+            "timestamp": row.get('timestamp').isoformat() if row.get('timestamp') else None
         }
         
         # Parse JSON fields safely
@@ -348,7 +372,7 @@ def update_job_status(job_id: int, status: str, notes: str):
 def get_external_jobs(username: str) -> List[Dict[str, Any]]:
     conn = get_db_connection()
     c = conn.cursor(cursor_factory=RealDictCursor)
-    c.execute("SELECT id, title, company, apply_link FROM scraped_jobs WHERE applied_status = 'EXTERNAL' AND username = %s ORDER BY timestamp DESC", (username,))
+    c.execute("SELECT id, title, company, apply_link, posted, timestamp FROM scraped_jobs WHERE applied_status = 'EXTERNAL' AND username = %s ORDER BY timestamp DESC, id DESC", (username,))
     jobs = c.fetchall()
     c.close(); conn.close()
     
@@ -358,14 +382,16 @@ def get_external_jobs(username: str) -> List[Dict[str, Any]]:
             "id": row.get('id'),
             "Title": row.get('title'),
             "Company": row.get('company'),
-            "Apply_Link": row.get('apply_link')
+            "Apply_Link": row.get('apply_link'),
+            "Posted": row.get('posted'),
+            "timestamp": row.get('timestamp').isoformat() if row.get('timestamp') else None
         })
     return clean_jobs
 
 def get_walkin_jobs(username: str) -> List[Dict[str, Any]]:
     conn = get_db_connection()
     c = conn.cursor(cursor_factory=RealDictCursor)
-    c.execute("SELECT id, title, company, apply_link FROM scraped_jobs WHERE applied_status = 'WALK-IN' AND username = %s ORDER BY timestamp DESC", (username,))
+    c.execute("SELECT id, title, company, apply_link, posted, timestamp FROM scraped_jobs WHERE applied_status = 'WALK-IN' AND username = %s ORDER BY timestamp DESC, id DESC", (username,))
     jobs = c.fetchall()
     c.close(); conn.close()
     
@@ -375,6 +401,55 @@ def get_walkin_jobs(username: str) -> List[Dict[str, Any]]:
             "id": row.get('id'),
             "Title": row.get('title'),
             "Company": row.get('company'),
-            "Apply_Link": row.get('apply_link')
+            "Apply_Link": row.get('apply_link'),
+            "Posted": row.get('posted'),
+            "timestamp": row.get('timestamp').isoformat() if row.get('timestamp') else None
         })
     return clean_jobs
+
+def get_all_scraped_jobs(username: str, limit: int = 100, status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    c = conn.cursor(cursor_factory=RealDictCursor)
+    
+    query = "SELECT * FROM scraped_jobs WHERE username = %s"
+    params = [username]
+    
+    if status_filter and status_filter.upper() != 'ALL':
+        sf = status_filter.upper()
+        if sf == 'FILTERED_OUT':
+            query += " AND kept_by_filter = 'no'"
+        elif sf == 'PENDING':
+            query += " AND applied_status = 'PENDING' AND (kept_by_filter = 'yes' OR kept_by_filter IS NULL)"
+        else:
+            query += " AND applied_status = %s"
+            params.append(sf)
+            
+    query += " ORDER BY timestamp DESC, id DESC LIMIT %s"
+    params.append(limit)
+    
+    c.execute(query, tuple(params))
+    jobs = c.fetchall()
+    c.close(); conn.close()
+    
+    clean_jobs = []
+    for row in jobs:
+        j = {
+            "id": row.get('id'),
+            "Role": row.get('role'),
+            "Title": row.get('title'),
+            "Company": row.get('company'),
+            "Posted": row.get('posted'),
+            "Apply_Link": row.get('apply_link'),
+            "Description": row.get('description'),
+            "Tech_Keywords": row.get('tech_keywords'),
+            "tech_match_score": row.get('tech_match_score'),
+            "kept_by_filter": row.get('kept_by_filter'),
+            "applied_status": row.get('applied_status'),
+            "applied_timestamp": row.get('applied_timestamp').isoformat() if row.get('applied_timestamp') else None,
+            "application_notes": row.get('application_notes'),
+            "timestamp": row.get('timestamp').isoformat() if row.get('timestamp') else None
+        }
+        clean_jobs.append(j)
+        
+    return clean_jobs
+

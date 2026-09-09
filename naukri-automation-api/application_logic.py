@@ -18,7 +18,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException, SessionNotCreatedException
 from webdriver_manager.chrome import ChromeDriverManager
-from chrome_utils import get_driver_path
+from chrome_utils import get_driver_path, create_stealth_driver, kill_zombie_chromedriver_processes
 
 from database_setup import get_pending_jobs, update_job_status
 
@@ -33,6 +33,9 @@ client = None
 if GROQ_API_KEY and Groq:
     try: client = Groq(api_key=GROQ_API_KEY)
     except: pass
+
+# --- MEMORY OPTIMIZATION SWITCH (Set to False to Undo) ---
+ENABLE_LOW_MEMORY_MODE = True
 
 class ApplicationEngine:
     def __init__(self, log_callback=None, pause_check=None):
@@ -67,9 +70,27 @@ class ApplicationEngine:
         options.add_argument("--disable-popup-blocking")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        
+        # Enhanced Memory & Process Optimization Flags
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-gpu-shader-disk-cache")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--mute-audio")
+        options.add_argument("--log-level=3")
+        options.add_argument("--disk-cache-size=1")
+        options.add_argument("--media-cache-size=1")
+
+        if ENABLE_LOW_MEMORY_MODE:
+            options.add_argument("--blink-settings=imagesEnabled=false")
+            options.add_argument("--renderer-process-limit=2")
+            self.log(">>> Low Memory Mode ENABLED (Images & GPU disabled to save RAM).")
+
         try:
-            driver_path = get_driver_path()
-            self.driver = uc.Chrome(options=options, headless=True, use_subprocess=True, driver_executable_path=driver_path)
+            self.driver = create_stealth_driver(options=options, headless=True, max_retries=3, log_fn=self.log)
             self.driver.set_page_load_timeout(60) 
             self.wait = WebDriverWait(self.driver, 20)
             self.log(">>> Browser Ready.")
@@ -265,6 +286,7 @@ class ApplicationEngine:
             if self.driver: self.driver.quit()
         except: pass
         self.driver = None
+        kill_zombie_chromedriver_processes()
 
     def run_application_job(self, email: str, password: str, resume_data: Dict[str, str], username: str):
         self.resume_data = resume_data

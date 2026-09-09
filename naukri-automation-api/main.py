@@ -23,19 +23,25 @@ from jose import JWTError, jwt
 # Import logic
 from scraper_logic import ScraperEngine, parse_user_experience_input 
 from application_logic import ApplicationEngine 
+from chrome_utils import kill_zombie_chromedriver_processes 
 from database_setup import (
     write_jobs_to_db, init_db, upsert_user_config, get_user_config, 
-    get_job_summary, create_website_user, get_website_user, get_external_jobs, get_walkin_jobs
+    get_job_summary, create_website_user, get_website_user, get_external_jobs, get_walkin_jobs,
+    get_all_scraped_jobs
 )
 
 load_dotenv()
 
 # --- CONFIG ---
-SECRET_KEY = os.getenv("SECRET_KEY", "super_secret_key_change_this") 
+# ⚠️  IMPORTANT: Set a strong SECRET_KEY in your .env file before going public!
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY or SECRET_KEY == "super_secret_key_change_this":
+    raise RuntimeError("❌ SECRET_KEY is not set or is using the default value. Set a strong key in your .env file!")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 3650 
 
-MAX_CONCURRENT_USERS = 4 
+# Max concurrent Chrome automation tasks on system (Allows up to 5 active browser sessions)
+MAX_CONCURRENT_USERS = 5 
 server_semaphore = threading.Semaphore(MAX_CONCURRENT_USERS)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -49,16 +55,23 @@ except Exception as e: print(f"Startup Warning: {e}")
 # CORS Configuration
 origins_env = os.getenv("ALLOWED_ORIGINS", "")
 if origins_env:
-    origins = [origin.strip() for origin in origins_env.split(",")]
+    origins = [origin.strip() for origin in origins_env.split(",") if origin.strip()]
 else:
-    origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    origins = [
+        "https://naukri-automation-sagar.web.app",
+        "https://naukri-automation-sagar.firebaseapp.com",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://localhost:8001",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, 
-    allow_origin_regex=r"https://.*\.vercel\.app", # Allow all Vercel subdomains
-    allow_credentials=True, 
-    allow_methods=["*"], 
+    allow_origins=origins,
+    allow_origin_regex=r"https://.*\.web\.app|https://.*\.firebaseapp\.com|http://localhost:.*|http://127\.0\.0\.1:.*",
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -292,6 +305,7 @@ def run_scrape_task(request_data: ScrapeRequest, loop):
                     roles_list=request_data.roles, location=request_data.location,
                     experience=request_data.experience, tech_keywords=request_data.tech_keywords,
                     apply_tech_filter=request_data.apply_tech_filter, min_score=request_data.min_score,
+                    apply_min_score=getattr(request_data, 'apply_min_score', True),
                     user_experience_dict=parsed_user_exp, include_user_experience=request_data.include_user_experience,
                     common_answers=common_ans, include_common_answers=request_data.include_common_answers,
                     db_writer=write_jobs_to_db, username=request_data.username 
@@ -301,6 +315,7 @@ def run_scrape_task(request_data: ScrapeRequest, loop):
                 if local_scraper.driver: 
                     try: local_scraper.driver.quit()
                     except: pass
+                kill_zombie_chromedriver_processes()
                 log_cb(f"[{datetime.now().strftime('%H:%M:%S')}] <<< SLOT RELEASED")
                 # Send explicit completion event for frontend stats refresh
                 log_cb({"action": "scrape_complete", "status": "done", "message": "Scraping session finished."})
@@ -326,6 +341,7 @@ def run_apply_task(username: str, password: str, resume_data: Dict, loop):
                 app_engine.run_application_job(username, password, resume_data, username)
             except Exception as e: log_cb(f"CRITICAL APPLY ERROR: {e}")
             finally: 
+                kill_zombie_chromedriver_processes()
                 log_cb(f"[{datetime.now().strftime('%H:%M:%S')}] <<< SLOT RELEASED")
                 # Send explicit completion event
                 log_cb({"action": "apply_complete", "status": "done", "message": "Application session finished."})
@@ -347,24 +363,30 @@ def run_full_automation_task(request_data: ScrapeRequest, loop):
     run_apply_task(request_data.username, request_data.password, resume_data, loop)
 
 @app.post("/start_scrape")
-async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks):
+async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks, current_user: str = Depends(get_current_user)):
+    # 🔒 Authenticated users only — JWT required
+    # Use current_user (website login email) as the DB storage key for consistency.
+    # request.username holds the Naukri login email used by the automation engine.
     try:
-        scrape_config_dict = request.model_dump(include={'location', 'experience', 'roles', 'tech_keywords', 'apply_tech_filter', 'min_score', 'user_exp_raw'})
+        scrape_config_dict = request.model_dump(include={'location', 'experience', 'roles', 'tech_keywords', 'apply_tech_filter', 'apply_min_score', 'min_score', 'user_exp_raw'})
         resume_data_dict = {
             "CURRENT_LOCATION": request.location, "POSTAL_CODE": request.postal_code,
             "LINKEDIN": request.common_answers.linkedin, "TOTAL_EXP_YEARS": request.total_exp_years,
             "NOTICE_PERIOD": request.common_answers.notice_period, "CURRENT_CTC": request.common_answers.current_ctc,
             "EXPECTED_CTC": request.common_answers.expected_ctc
         }
-        upsert_user_config(request.username, request.password, scrape_config_dict, resume_data_dict)
+        upsert_user_config(current_user, request.password, scrape_config_dict, resume_data_dict)
     except: pass
-    
+
+    # Override the storage username with current_user so DB stats match dashboard queries
+    request_copy = request.model_copy(update={"username": current_user})
     loop = asyncio.get_running_loop()
-    background_tasks.add_task(run_scrape_task, request, loop)
-    return {"status": f"Scraping queued for {request.username}"}
+    background_tasks.add_task(run_scrape_task, request_copy, loop)
+    return {"status": f"Scraping queued for {current_user}"}
 
 @app.post("/start_apply")
-async def start_apply(request: ScrapeRequest, background_tasks: BackgroundTasks):
+async def start_apply(request: ScrapeRequest, background_tasks: BackgroundTasks, current_user: str = Depends(get_current_user)):
+    # 🔒 Authenticated users only — JWT required
     resume_data = {
         "CURRENT_LOCATION": request.location, "POSTAL_CODE": request.postal_code,
         "LINKEDIN": request.common_answers.linkedin, "TOTAL_EXP_YEARS": request.total_exp_years,
@@ -372,28 +394,33 @@ async def start_apply(request: ScrapeRequest, background_tasks: BackgroundTasks)
         "EXPECTED_CTC": request.common_answers.expected_ctc
     }
     loop = asyncio.get_running_loop()
-    background_tasks.add_task(run_apply_task, request.username, request.password, resume_data, loop)
-    return {"status": f"Application queued for {request.username}"}
+    # Use current_user as DB key; request.username is the Naukri login email for the bot
+    background_tasks.add_task(run_apply_task, current_user, request.password, resume_data, loop)
+    return {"status": f"Application queued for {current_user}"}
 
 @app.post("/run_full_automation")
-async def run_full_automation(request: ScrapeRequest, background_tasks: BackgroundTasks):
+async def run_full_automation(request: ScrapeRequest, background_tasks: BackgroundTasks, current_user: str = Depends(get_current_user)):
+    # 🔒 Authenticated users only — JWT required
     try:
-        scrape_config_dict = request.model_dump(include={'location', 'experience', 'roles', 'tech_keywords', 'apply_tech_filter', 'min_score', 'user_exp_raw'})
+        scrape_config_dict = request.model_dump(include={'location', 'experience', 'roles', 'tech_keywords', 'apply_tech_filter', 'apply_min_score', 'min_score', 'user_exp_raw'})
         resume_data_dict = {
             "CURRENT_LOCATION": request.location, "POSTAL_CODE": request.postal_code,
             "LINKEDIN": request.common_answers.linkedin, "TOTAL_EXP_YEARS": request.total_exp_years,
             "NOTICE_PERIOD": request.common_answers.notice_period, "CURRENT_CTC": request.common_answers.current_ctc,
             "EXPECTED_CTC": request.common_answers.expected_ctc
         }
-        upsert_user_config(request.username, request.password, scrape_config_dict, resume_data_dict)
+        upsert_user_config(current_user, request.password, scrape_config_dict, resume_data_dict)
     except: pass
-    
+
+    # Override storage username with current_user so DB stats match dashboard queries
+    request_copy = request.model_copy(update={"username": current_user})
     loop = asyncio.get_running_loop()
-    background_tasks.add_task(run_full_automation_task, request, loop)
-    return {"status": f"Full automation queued for {request.username}"}
+    background_tasks.add_task(run_full_automation_task, request_copy, loop)
+    return {"status": f"Full automation queued for {current_user}"}
 
 @app.get("/task_status/{username}")
-async def get_task_status(username: str):
+async def get_task_status(username: str, current_user: str = Depends(get_current_user)):
+    # 🔒 Authenticated users only — JWT required
     status_msg = active_tasks.get(username, "Idle")
     is_paused = False
     if username in pause_events and not pause_events[username].is_set():
@@ -401,38 +428,69 @@ async def get_task_status(username: str):
     return {"username": username, "status": status_msg, "is_running": status_msg != "Idle", "is_paused": is_paused}
 
 @app.post("/pause_task/{username}")
-async def pause_task(username: str):
+async def pause_task(username: str, current_user: str = Depends(get_current_user)):
+    # 🔒 JWT required — users can only pause their own task
+    if current_user != username:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only control your own tasks")
     get_pause_event(username).clear()
     return {"status": "paused"}
 
 @app.post("/resume_task/{username}")
-async def resume_task(username: str):
+async def resume_task(username: str, current_user: str = Depends(get_current_user)):
+    # 🔒 JWT required — users can only resume their own task
+    if current_user != username:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only control your own tasks")
     get_pause_event(username).set()
     return {"status": "resumed"}
 
 @app.post("/stop_task/{username}")
-async def stop_task(username: str):
+async def stop_task(username: str, current_user: str = Depends(get_current_user)):
+    # 🔒 JWT required — users can only stop their own task
+    if current_user != username:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only control your own tasks")
     get_stop_event(username).set()
     # Also resume the pause event so the thread isn't stuck waiting to be resumed before dying
     get_pause_event(username).set()
+    kill_zombie_chromedriver_processes()
     return {"status": "stopped"}
 
 
 @app.get("/dashboard_stats/{email}")
-async def dashboard_stats(email: str, days: int = 7):
+async def dashboard_stats(email: str, days: int = 7, current_user: str = Depends(get_current_user)):
+    # 🔒 JWT required — users can only view their own dashboard
+    if current_user != email:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only access your own data")
     stats = get_job_summary(email, days)
     return {"email": email, "stats": stats}
 
 @app.get("/external_jobs/{email}")
-async def external_jobs(email: str):
+async def external_jobs(email: str, current_user: str = Depends(get_current_user)):
+    # 🔒 JWT required — users can only view their own jobs
+    if current_user != email:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only access your own data")
     jobs = get_external_jobs(email)
     return {"email": email, "jobs": jobs}
 
 @app.get("/walkin_jobs/{email}")
-async def walkin_jobs(email: str):
+async def walkin_jobs(email: str, current_user: str = Depends(get_current_user)):
+    # 🔒 JWT required — users can only view their own jobs
+    if current_user != email:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only access your own data")
     jobs = get_walkin_jobs(email)
     return {"email": email, "jobs": jobs}
 
+@app.get("/scraped_jobs/{email}")
+async def scraped_jobs(email: str, limit: int = 100, status_filter: Optional[str] = None, current_user: str = Depends(get_current_user)):
+    # 🔒 JWT required — users can only view their own jobs
+    if current_user != email:
+        raise HTTPException(status_code=403, detail="Forbidden: You can only access your own data")
+    jobs = get_all_scraped_jobs(email, limit=limit, status_filter=status_filter)
+    return {"email": email, "count": len(jobs), "jobs": jobs}
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
+    # 🔒 SECURITY: Bind to 127.0.0.1 ONLY — not all interfaces.
+    # Cloudflare Tunnel connects to localhost, so external users
+    # can NEVER bypass the tunnel to reach this server directly.
+    uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
